@@ -1,0 +1,13 @@
+.{
+    .name = .font_renderer,
+    .version = "0.0.1",
+    .minimum_zig_version = "0.15.1",
+    .fingerprint = 0x3ff4d8f6ff6387a9,
+
+    .paths = .{
+        "build.zig.zon",
+        "build.zig",
+        "third-party",
+        "src",
+    },
+}
