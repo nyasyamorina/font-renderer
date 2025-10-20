@@ -1,6 +1,6 @@
 const std = @import("std");
 
-const config = @import("config.zig");
+const Config = @import("Config.zig");
 const glfw = @import("c/glfw.zig");
 const helpers = @import("helpers.zig");
 const VulkanContext = @import("VulkanContext.zig");
@@ -22,6 +22,12 @@ pub fn main() !void {
 
     var stdout = std.fs.File.stdout().writer(&io_buffers[0]);
     var stdin = std.fs.File.stdin().reader(&io_buffers[1]);
+
+    var config_builder: Config.Builder = .init;
+    defer config_builder.deinit(gpa.allocator());
+    try config_builder.loadCmdLineArgs(gpa.allocator());
+    const config = try config_builder.build();
+    _ = config;
 
     if (glfw.init() != glfw.@"true") return error.@"Failed to initialize glfw";
     defer glfw.terminate();

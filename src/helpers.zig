@@ -25,10 +25,15 @@ pub fn ensureVkSuccess(comptime name: []const u8, result: vk.Result) !void {
 }
 
 pub fn ensureAlloc(allocate_result: anytype) @typeInfo(@TypeOf(allocate_result)).error_union.payload {
-    comptime std.debug.assert(@typeInfo(@TypeOf(allocate_result)).error_union.error_set == std.mem.Allocator.Error);
-    return allocate_result catch {
-        @branchHint(.cold);
-        @panic("Out Of Memory");
-    };
+    const error_count = std.meta.tags(@typeInfo(@TypeOf(allocate_result)).error_union.error_set).len;
+    if (error_count == 0) {
+        return allocate_result catch unreachable;
+    } else if (error_count == 1) {
+        return allocate_result catch |err| switch (err) {
+            error.OutOfMemory => @panic("OOM"),
+        };
+    } else {
+        @compileError("this method can only call after memory allocations");
+    }
 }
 
