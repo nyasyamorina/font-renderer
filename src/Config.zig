@@ -197,6 +197,7 @@ pub const Builder = struct {
             } else {
                 log.err("unknown command line arg: {s}", .{arg});
                 all_ok = false;
+                break :next_arg;
             }
         }
         if (!all_ok) return error.@"Failed to load command line arguments";
