@@ -14,10 +14,15 @@ pub const i16f16 = FixedPointNumber(i32, 16);
 pub const i2f14 = FixedPointNumber(i16, 14);
 
 
-unit_per_em: u16,
+information: Information,
 char_glyph_mapping: CharGlyphMapping,
 glyphs: []Glyph,
 
+
+pub const Information = struct {
+    units_per_em: u16,
+    y0_baseline: bool,
+};
 
 pub fn initTTF(allocator: std.mem.Allocator, file: *std.fs.File.Reader) !Font {
     const pos_begin = file.logicalPos();
@@ -56,9 +61,12 @@ pub fn initTTF(allocator: std.mem.Allocator, file: *std.fs.File.Reader) !Font {
     }
 
     return .{
-        .unit_per_em = head.units_per_em,
         .char_glyph_mapping = cg_map,
         .glyphs = glyphs,
+        .information = .{
+            .units_per_em = head.units_per_em,
+            .y0_baseline = head.flags.y0_baseline,
+        },
     };
 }
 

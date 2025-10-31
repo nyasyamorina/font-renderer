@@ -4,6 +4,8 @@ const Config = @import("Config.zig");
 const Font = @import("font/Font.zig");
 const glfw = @import("c/glfw.zig");
 const helpers = @import("helpers.zig");
+const qoi = @import("tools/qoi.zig");
+const renderGlyph = @import("tools/render_glyph.zig").renderGlyph;
 const VulkanContext = @import("VulkanContext.zig");
 
 pub const ensureAlloc = helpers.ensureAlloc;
@@ -18,7 +20,7 @@ pub fn main() !void {
     defer _ = gpa.deinit();
 
     const io_buffer_size = 512;
-    const io_buffer_count = 2;
+    const io_buffer_count = 3;
     const io_buffers = ensureAlloc(gpa.allocator().alloc([io_buffer_size]u8, io_buffer_count));
     defer gpa.allocator().free(io_buffers);
 
@@ -32,6 +34,16 @@ pub fn main() !void {
 
     var font = try loadTTFFile(gpa.allocator(), config.font_file.value);
     defer font.deinit(gpa.allocator());
+
+    //const glyph = font.getGlyph('⚡');
+    const glyph = font.getGlyph('α');
+    var im = try renderGlyph(gpa.allocator(), glyph.*, font.information, 600);
+    defer im.deinit(gpa.allocator());
+    const out_qoi = try std.fs.cwd().createFile("playground/out.qoi", .{});
+    defer out_qoi.close();
+    var qoi_writer = out_qoi.writer(&io_buffers[2]);
+    defer qoi_writer.interface.flush() catch {};
+    try qoi.saveRGB(&qoi_writer.interface, &im.interface);
 
     //if (glfw.init() != glfw.true) return error.@"Failed to initialize glfw";
     //defer glfw.terminate();
