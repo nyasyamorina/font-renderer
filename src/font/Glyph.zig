@@ -1,48 +1,15 @@
 const std = @import("std");
 
 const Glyph = @This();
-const helper = @import("../helpers.zig");
+const helpers = @import("../helpers.zig");
 const log = std.log.scoped(.Glyph);
 const ttf = @import("ttf.zig");
 
-const ensureAlloc = helper.ensureAlloc;
+const ensureAlloc = helpers.ensureAlloc;
 
 
 box: Box,
 contours: []Contour,
-
-
-pub const TTFComponentGlyphSet = std.AutoHashMapUnmanaged(u16, struct {ttf.GlyphDescription, ttf.ComponentGlyph});
-
-pub fn resolveTTFComponentGlyphs(allocator: std.mem.Allocator, glyphs: []Glyph, component_glyphs: *TTFComponentGlyphSet) !void {
-    const resolved_idx_buf = ensureAlloc(allocator.alloc(u16, component_glyphs.count()));
-    defer allocator.free(resolved_idx_buf);
-    var resolved_idx: std.ArrayList(u16) = .initBuffer(resolved_idx_buf);
-
-    while (component_glyphs.count() != 0) {
-        var iter = component_glyphs.iterator();
-        resolve_glyph: while (iter.next()) |entry| {
-            // check the parts of component glyph is all resolved
-            for (entry.value_ptr.@"1".parts) |part| {
-                if (component_glyphs.contains(part.glyph_index)) continue :resolve_glyph;
-            }
-
-            //@compileError("TODO");
-            glyphs[entry.key_ptr.*] = .initEmpty(entry.value_ptr.@"0");
-            resolved_idx.appendAssumeCapacity(entry.key_ptr.*);
-        }
-
-        if (resolved_idx.items.len == 0) {
-            log.err("glyphs in ttf file contains loop referenced component parts", .{});
-            return error.LoopRefedParts;
-        }
-        for (resolved_idx.items) |idx| {
-            var pair = component_glyphs.fetchRemove(idx).?;
-            pair.value.@"1".deinit(allocator);
-        }
-        resolved_idx.clearRetainingCapacity();
-    }
-}
 
 
 pub const Box = struct {
@@ -127,11 +94,11 @@ pub fn initEmpty(description: ttf.GlyphDescription) Glyph {
     };
 }
 
-pub fn initTTFSimple(allocator: std.mem.Allocator, description: ttf.GlyphDescription, data: ttf.SimpleGlyph) !Glyph {
-    const contours = ensureAlloc(allocator.alloc(Contour, data.end_pts_of_contours.len));
-    errdefer allocator.free(contours);
-    const points = ensureAlloc(allocator.alloc(Contour.Point, Contour.countTTFPoints(data)));
-    errdefer allocator.free(points);
+pub fn initTTFSimple(description: ttf.GlyphDescription, data: ttf.SimpleGlyph) !Glyph {
+    const contours = ensureAlloc(helpers.allocator.alloc(Contour, data.end_pts_of_contours.len));
+    errdefer helpers.allocator.free(contours);
+    const points = ensureAlloc(helpers.allocator.alloc(Contour.Point, Contour.countTTFPoints(data)));
+    errdefer helpers.allocator.free(points);
 
     var empty_point_buf = points;
     for (contours, 0..) |*contour, idx| {
@@ -149,13 +116,26 @@ pub fn initTTFSimple(allocator: std.mem.Allocator, description: ttf.GlyphDescrip
     };
 }
 
-pub fn deinit(self: *Glyph, allocator: std.mem.Allocator) void {
+pub fn initTTFComponent(description: ttf.GlyphDescription, data: ttf.ComponentGlyph, glyphs: []const ?Glyph) !Glyph {
+    _ = data; _ = glyphs;
+    // TODO: 123
+
+    return .{
+        .box = .{
+            .x_min = description.x_min, .y_min = description.y_min,
+            .x_max = description.x_max, .y_max = description.y_max,
+        },
+        .contours = &.{},
+    };
+}
+
+pub fn deinit(self: *Glyph) void {
     if (self.contours.len > 0) {
         var count: usize = 0;
         for (self.contours) |contour| count += contour.points.len;
-        allocator.free(self.contours[0].points.ptr[0 .. count]);
+        helpers.allocator.free(self.contours[0].points.ptr[0 .. count]);
     }
-    allocator.free(self.contours);
+    helpers.allocator.free(self.contours);
     self.contours = undefined;
 }
 

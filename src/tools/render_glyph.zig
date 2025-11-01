@@ -7,7 +7,7 @@ const Image = @import("Image.zig");
 const log = std.log.scoped(.renderGlyph);
 
 
-pub fn renderGlyph(allocator: std.mem.Allocator, glyph: Glyph, font_info: Font.Information, font_size: u16) !Image.Gray {
+pub fn renderGlyph(glyph: Glyph, font_info: Font.Information, font_size: u16) !Image.Gray {
     const v4f32 = @Vector(4, f32);
     const scale = @as(f32, @floatFromInt(font_size)) / @as(f32, @floatFromInt(font_info.units_per_em));
     const glyph_box: @Vector(4, i16) = .{glyph.box.x_min, glyph.box.y_min, glyph.box.x_max, glyph.box.y_max};
@@ -18,8 +18,8 @@ pub fn renderGlyph(allocator: std.mem.Allocator, glyph: Glyph, font_info: Font.I
     const height: u16 = @intCast(@as(i16, max_corner[1]) - min_corner[1] + 1);
     if (!font_info.y0_baseline) log.warn("y=0 is not font baseline is not consider yet", .{});
 
-    var im: Image.Gray = .init(allocator, width, height);
-    errdefer im.deinit(allocator);
+    var im: Image.Gray = .init(helpers.allocator, width, height);
+    errdefer im.deinit(helpers.allocator);
     for (0..height) |y| {
         for (0..width) |x| {
             const coord_x = @as(f32, @floatFromInt(min_corner[0] + @as(i16, @intCast(x)))) / scale;

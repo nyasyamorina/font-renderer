@@ -6,6 +6,8 @@ const vk = @import("c/vk.zig");
 pub const native_endian = builtin.target.cpu.arch.endian();
 pub const in_safe_mode = builtin.mode == .Debug or builtin.mode == .ReleaseSafe;
 
+pub var allocator: std.mem.Allocator = if (in_safe_mode) undefined else std.heap.smp_allocator;
+
 
 pub fn logger(comptime level: std.log.Level, comptime scope: @Type(.enum_literal), comptime format: []const u8, args: anytype) void {
     const scope_name = switch (scope) {
@@ -88,9 +90,9 @@ pub fn readInts(reader: *std.Io.Reader, endian: std.builtin.Endian, comptime Int
     if (endian != native_endian) { for (arr) |*ele| ele.* = @byteSwap(ele.*); }
 }
 
-pub fn readIntAlloc(allocator: std.mem.Allocator, reader: *std.Io.Reader, endian: std.builtin.Endian, comptime Int: type, n: usize) std.Io.Reader.Error![]Int {
-    const arr = ensureAlloc(allocator.alloc(Int, n));
-    errdefer allocator.free(arr);
+pub fn readIntAlloc(ally: std.mem.Allocator, reader: *std.Io.Reader, endian: std.builtin.Endian, comptime Int: type, n: usize) std.Io.Reader.Error![]Int {
+    const arr = ensureAlloc(ally.alloc(Int, n));
+    errdefer ally.free(arr);
     try readInts(reader, endian, Int, arr);
     return arr;
 }

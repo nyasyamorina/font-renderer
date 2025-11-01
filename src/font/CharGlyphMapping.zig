@@ -1,9 +1,9 @@
 const std = @import("std");
 
-const helper = @import("../helpers.zig");
+const helpers = @import("../helpers.zig");
 
 const CharGlyphMapping = @This();
-const ensureAlloc = helper.ensureAlloc;
+const ensureAlloc = helpers.ensureAlloc;
 
 
 branches: []Branch,
@@ -46,17 +46,17 @@ pub const RangeMapping = struct {
     }
 };
 
-pub fn initOwned(allocator: std.mem.Allocator, mappings: []RangeMapping) CharGlyphMapping {
+pub fn initOwned(mappings: []RangeMapping) CharGlyphMapping {
     return .{
-        .branches = buildBraches(allocator, mappings),
+        .branches = buildBraches(mappings),
         .mappings = mappings,
     };
 }
 
-pub fn deinit(self: *CharGlyphMapping, allocator: std.mem.Allocator) void {
-    allocator.free(self.branches);
+pub fn deinit(self: *CharGlyphMapping) void {
+    helpers.allocator.free(self.branches);
     self.branches = undefined;
-    allocator.free(self.mappings);
+    helpers.allocator.free(self.mappings);
     self.mappings = undefined;
 }
 
@@ -84,8 +84,8 @@ pub fn getGlyph(self: CharGlyphMapping, char: u32) u16 {
     }
 }
 
-fn buildBraches(allocator: std.mem.Allocator, mappings: []const RangeMapping) []Branch {
-    const branches = ensureAlloc(allocator.alloc(Branch, @max(1, mappings.len - 1)));
+fn buildBraches(mappings: []const RangeMapping) []Branch {
+    const branches = ensureAlloc(helpers.allocator.alloc(Branch, @max(1, mappings.len - 1)));
     if (mappings.len == 1) {
         branches[0] = .{
             .start_char = mappings[0].end_char - mappings[0].char_count,
@@ -100,8 +100,8 @@ fn buildBraches(allocator: std.mem.Allocator, mappings: []const RangeMapping) []
             std.debug.assert(right.end_char - left.end_char >= right.char_count);
         }
     }
-    const branch_ranges = ensureAlloc(allocator.alloc(struct {u16, u16}, branches.len));
-    defer allocator.free(branch_ranges);
+    const branch_ranges = ensureAlloc(helpers.allocator.alloc(struct {u16, u16}, branches.len));
+    defer helpers.allocator.free(branch_ranges);
     branch_ranges[0] = .{0, @intCast(mappings.len)};
 
     var process_idx: u16 = 0;

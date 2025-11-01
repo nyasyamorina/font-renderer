@@ -1,14 +1,14 @@
 const std = @import("std");
 
+const Appli = @import("Appli.zig");
 const Config = @import("Config.zig");
 const Font = @import("font/Font.zig");
 const glfw = @import("c/glfw.zig");
 const helpers = @import("helpers.zig");
 const qoi = @import("tools/qoi.zig");
 const renderGlyph = @import("tools/render_glyph.zig").renderGlyph;
-const VulkanContext = @import("VulkanContext.zig");
 
-pub const ensureAlloc = helpers.ensureAlloc;
+pub var gpa = if (helpers.in_safe_mode) std.heap.DebugAllocator(.{}).init else @as(void, undefined);
 pub const std_options: std.Options = .{
     .logFn = helpers.logger,
     .fmt_max_depth = 10,
@@ -16,55 +16,38 @@ pub const std_options: std.Options = .{
 
 
 pub fn main() !void {
-    var gpa = std.heap.DebugAllocator(.{}).init;
-    defer _ = gpa.deinit();
-
-    const io_buffer_size = 512;
-    const io_buffer_count = 3;
-    const io_buffers = ensureAlloc(gpa.allocator().alloc([io_buffer_size]u8, io_buffer_count));
-    defer gpa.allocator().free(io_buffers);
-
-    var stdout = std.fs.File.stdout().writer(&io_buffers[0]);
-    var stdin = std.fs.File.stdin().reader(&io_buffers[1]);
+    if (helpers.in_safe_mode) helpers.allocator = gpa.allocator();
+    defer if (helpers.in_safe_mode) { _ = gpa.deinit(); };
 
     var config_builder: Config.Builder = .init;
-    defer config_builder.deinit(gpa.allocator());
-    try config_builder.loadCmdLineArgs(gpa.allocator());
+    defer config_builder.deinit();
+    try config_builder.loadCmdLineArgs();
     const config = try config_builder.build();
 
-    var font = try loadTTFFile(gpa.allocator(), config.font_file.value);
-    defer font.deinit(gpa.allocator());
+    const ttf_file = try std.fs.cwd().openFile(config.font_file.value, .{});
+    defer ttf_file.close();
+    var font: Font = try .initTTF(ttf_file, 1024);
+    defer font.deinit();
 
-    //const glyph = font.getGlyph('⚡');
-    const glyph = font.getGlyph('α');
-    var im = try renderGlyph(gpa.allocator(), glyph.*, font.information, 600);
-    defer im.deinit(gpa.allocator());
-    const out_qoi = try std.fs.cwd().createFile("playground/out.qoi", .{});
-    defer out_qoi.close();
-    var qoi_writer = out_qoi.writer(&io_buffers[2]);
-    defer qoi_writer.interface.flush() catch {};
-    try qoi.saveRGB(&qoi_writer.interface, &im.interface);
+    try renderGlyphToQoi(&font, 'α', 600, "playground/out.qoi");
 
-    //if (glfw.init() != glfw.true) return error.@"Failed to initialize glfw";
-    //defer glfw.terminate();
-
-    //var vk_ctx: VulkanContext = try .init(gpa.allocator(), &stdout.interface, &stdin.interface);
-    //defer vk_ctx.deinit();
-
-    //try vk_ctx.mainLoop();
-    _ = &stdout; _ = &stdin;
+    var appli: Appli = try .init(.{ .width = 800, .height = 600 });
+    defer appli.deinit();
 }
 
-fn loadTTFFile(allocator: std.mem.Allocator, file_path: []const u8) !Font {
-    const file = try std.fs.cwd().openFile(file_path, .{});
-    defer file.close();
+fn renderGlyphToQoi(font: *Font, char: u32, font_size: u16, qoi_filepath: []const u8) !void {
+    const glyph = try font.getGlyph(char);
 
-    const read_buffer = ensureAlloc(allocator.alloc(u8, 4096));
-    defer allocator.free(read_buffer);
-    var reader = file.reader(read_buffer);
+    var im = try renderGlyph(glyph, font.information, font_size);
+    defer im.deinit(helpers.allocator);
 
-    var font = try Font.initTTF(allocator, &reader);
-    errdefer font.deinit(allocator);
-    return font;
+    const qoi_file = try std.fs.cwd().createFile(qoi_filepath, .{});
+    defer qoi_file.close();
+
+    var buf: [512]u8 = undefined;
+    var qoi_writer = qoi_file.writer(&buf);
+    defer qoi_writer.interface.flush() catch {};
+
+    try qoi.saveRGB(&qoi_writer.interface, &im.interface);
 }
 

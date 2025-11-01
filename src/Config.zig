@@ -131,16 +131,16 @@ pub const Builder = struct {
         return &self.config;
     }
 
-    pub fn deinit(self: *Builder, allocator: std.mem.Allocator) void {
+    pub fn deinit(self: *Builder) void {
         inline for (Config.fields) |field| {
             if (@field(self.free_flags, field.name)) {
-                @field(self.config, field.name).deinit(allocator);
+                @field(self.config, field.name).deinit(helpers.allocator);
             }
         }
     }
 
-    pub fn loadCmdLineArgs(self: *Builder, allocator: std.mem.Allocator) !void {
-        var arg_iter = ensureAlloc(std.process.argsWithAllocator(allocator));
+    pub fn loadCmdLineArgs(self: *Builder) !void {
+        var arg_iter = ensureAlloc(std.process.argsWithAllocator(helpers.allocator));
         arg_iter.deinit();
         _ = arg_iter.next(); // this program path
 
@@ -181,7 +181,7 @@ pub const Builder = struct {
                                 continue :next_arg;
                             },
                             .string => str: {
-                                const string = ensureAlloc(allocator.dupe(u8, value_str));
+                                const string = ensureAlloc(helpers.allocator.dupe(u8, value_str));
                                 free_flag.* = true;
                                 break :str string;
                             },

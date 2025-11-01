@@ -3,16 +3,14 @@ const std = @import("std");
 
 const glfw = @import("c/glfw.zig");
 const vk = @import("c/vk.zig");
-const helper = @import("helpers.zig");
+const helpers = @import("helpers.zig");
 
 const VulkanContext = @This();
 const log = std.log.scoped(.VulkanContext);
-const ensureAlloc = helper.ensureAlloc;
-const ensureVkSuccess = helper.ensureVkSuccess;
+const ensureAlloc = helpers.ensureAlloc;
+const ensureVkSuccess = helpers.ensureVkSuccess;
 const enable_validation = builtin.mode == .Debug;
 
-
-allocator: std.mem.Allocator,
 
 window: ?*glfw.Window = null,
 instance: vk.Instance = null,
@@ -40,29 +38,29 @@ pub const InitError = error {
     @"No suitable device available",
 } || CreateSwapchainStuffError || std.Io.Writer.Error || std.Io.Reader.DelimiterError;
 
-pub fn init(allocator: std.mem.Allocator, stdout: *std.Io.Writer, stdin: *std.Io.Reader) InitError!VulkanContext {
-    var self: VulkanContext = .{ .allocator = allocator };
+pub fn init(window_size: vk.Extent2D) InitError!VulkanContext {
+    var self: VulkanContext = .{};
 
-    try self.createWindow();
+    try self.createWindow(window_size);
     errdefer glfw.destroyWindow(self.window);
     try self.createInstanceAndDebugMessenger();
     errdefer self.destroyInstanceAndDebugMessenger();
     try ensureVkSuccess("glfwCreateWindowSurface", glfw.createWindowSurface(self.instance, self.window, null, &self.surface));
     errdefer vk.destroySurfaceKHR(self.instance, self.surface, null);
-    try self.pickAndCreateDevice(stdout, stdin);
+    try self.pickAndCreateDevice();
     errdefer vk.destroyDevice(self.device, null);
     self.command_pools = try .init(self.device, self.queue_families);
     errdefer self.command_pools.deinit(self.device);
     try self.createSwapchainStuff(.{});
     errdefer self.destroySwapchainStuff(true);
-    self.swapchain_operations = try .init(self.allocator, self.device, self.swapchain_image_views.items.len, 1);
+    self.swapchain_operations = try .init(self.device, self.swapchain_image_views.items.len, 1);
     errdefer self.swapchain_operations.deinit(self.allocator, self.device);
 
     return self;
 }
 
 pub fn deinit(self: *VulkanContext) void {
-    self.swapchain_operations.deinit(self.allocator, self.device);
+    self.swapchain_operations.deinit(self.device);
     self.destroySwapchainStuff(true);
     self.command_pools.deinit(self.device);
     vk.destroyDevice(self.device, null);
@@ -87,11 +85,11 @@ pub const window_title = "ZigVkSoftRayTracing";
 pub const window_init_width = 800;
 pub const window_init_height = 600;
 
-fn createWindow(self: *VulkanContext) InitError!void {
+fn createWindow(self: *VulkanContext, window_size: vk.Extent2D) InitError!void {
     glfw.windowHint(glfw.client_api, glfw.no_api);
     glfw.windowHint(glfw.resizable, glfw.@"false");
 
-    self.window = glfw.createWindow(window_init_width, window_init_height, window_title, null, null);
+    self.window = glfw.createWindow(@intCast(window_size.width), @intCast(window_size.height), window_title, null, null);
     if (self.window == null) return InitError.@"Failed to create window";
 }
 
@@ -109,23 +107,23 @@ fn createInstanceAndDebugMessenger(self: *VulkanContext) InitError!void {
 
     // Instance extensions
     var extension_names: std.ArrayList([*c]const u8) = .empty;
-    defer extension_names.deinit(self.allocator);
+    defer extension_names.deinit(helpers.allocator);
 
     var count: u32 = 0;
     const glfw_extensions = glfw.getRequiresInstanceExtensions(&count);
-    ensureAlloc(extension_names.appendSlice(self.allocator, glfw_extensions[0..count]));
+    ensureAlloc(extension_names.appendSlice(helpers.allocator, glfw_extensions[0..count]));
 
     if (builtin.target.os.tag == .macos) try extension_names.append(self.allocator, vk.KHR_portability_enumeration_extension_name);
 
     // Instance layers
     var layer_names: std.ArrayList([*c]const u8) = .empty;
-    defer layer_names.deinit(self.allocator);
+    defer layer_names.deinit(helpers.allocator);
 
     // Debug stuff
     var debug_info: vk.DebugUtilsMessengerCreateInfoEXT = undefined;
     if (enabled_validation) {
-        ensureAlloc(extension_names.append(self.allocator, vk.EXT_debug_utils_extension_name));
-        ensureAlloc(layer_names.ensureUnusedCapacity(self.allocator, validation_layers.len));
+        ensureAlloc(extension_names.append(helpers.allocator, vk.EXT_debug_utils_extension_name));
+        ensureAlloc(layer_names.ensureUnusedCapacity(helpers.allocator, validation_layers.len));
         for (validation_layers) |layer| layer_names.appendAssumeCapacity(layer.ptr);
         debug_info = getDebugUtilsMessengerCreateInfoEXT();
     }
@@ -135,8 +133,8 @@ fn createInstanceAndDebugMessenger(self: *VulkanContext) InitError!void {
     if (extension_names.items.len > 0) {
         count = 0;
         try ensureVkSuccess("vkEnumerateInstanceExtensionProperties", vk.enumerateInstanceExtensionProperties(null, &count, null));
-        const extensions_properties = ensureAlloc(self.allocator.alloc(vk.ExtensionProperties, count));
-        defer self.allocator.free(extensions_properties);
+        const extensions_properties = ensureAlloc(helpers.allocator.alloc(vk.ExtensionProperties, count));
+        defer helpers.allocator.free(extensions_properties);
         try ensureVkSuccess("vkEnumerateInstanceExtensionProperties", vk.enumerateInstanceExtensionProperties(null, &count, extensions_properties.ptr));
 
         for (extension_names.items) |extension_name| {
@@ -154,8 +152,8 @@ fn createInstanceAndDebugMessenger(self: *VulkanContext) InitError!void {
     if (layer_names.items.len > 0) {
         count = 0;
         try ensureVkSuccess("vkEnumerateInstanceLayerProperties", vk.enumerateInstanceLayerProperties(&count, null));
-        const layers_properties = ensureAlloc(self.allocator.alloc(vk.LayerProperties, count));
-        defer self.allocator.free(layers_properties);
+        const layers_properties = ensureAlloc(helpers.allocator.alloc(vk.LayerProperties, count));
+        defer helpers.allocator.free(layers_properties);
         try ensureVkSuccess("vkEnumerateInstanceLayerProperties", vk.enumerateInstanceLayerProperties(&count, layers_properties.ptr));
 
         for (layer_names.items) |layer_name| {
@@ -262,7 +260,7 @@ pub const device_extensions = [_][*:0]const u8 {
     vk.KHR_synchronization_2_extension_name,
 };
 
-fn pickAndCreateDevice(self: *VulkanContext, stdout: *std.Io.Writer, stdin: *std.Io.Reader) InitError!void {
+fn pickAndCreateDevice(self: *VulkanContext) InitError!void {
     // select physical device
     var count: u32 = 0;
     try ensureVkSuccess("vkEnumeratePhysicalDevices", vk.enumeratePhysicalDevices(self.instance, &count, null));
@@ -281,32 +279,20 @@ fn pickAndCreateDevice(self: *VulkanContext, stdout: *std.Io.Writer, stdin: *std
             }
         },
         else => {
-            const devices = ensureAlloc(self.allocator.alloc(vk.PhysicalDevice, count));
-            defer self.allocator.free(devices);
+            log.info("{d} devices detected", .{count});
+            const devices = ensureAlloc(helpers.allocator.alloc(vk.PhysicalDevice, count));
+            defer helpers.allocator.free(devices);
             try ensureVkSuccess("vkEnumeratePhysicalDevices", vk.enumeratePhysicalDevices(self.instance, &count, devices.ptr));
 
-            try stdout.print("multiple devices detected, please select one:\n", .{});
-            for (devices, 0..) |device, idx| {
-                var properties: vk.PhysicalDeviceProperties = .{};
-                vk.getPhysicalDeviceProperties(device, &properties);
-                try stdout.print("  {d}: {s}\n", .{idx, properties.deviceName});
-            }
-
-            while (self.physical_device == null) {
-                try stdout.print(" >> ", .{});
-                try stdout.flush();
-                const num_text = try stdin.takeDelimiterExclusive('\n');
-                if (std.fmt.parseInt(u32, num_text, 0)) |num| {
-                    if (num < count) {
-                        if (self.checkPhysicalDeviceSuitabilities(devices[num])) {
-                            self.physical_device = devices[num];
-                        } else {
-                            try stdout.print("selected device is not suitable for this application, please select an other one:\n", .{});
-                        }
-                        continue;
-                    }
-                } else |_| {}
-                try stdout.print("invalid number, please try again:\n", .{});
+            for (devices) |device| {
+                if (self.checkPhysicalDeviceSuitabilities(device)) {
+                    self.physical_device = device;
+                    break;
+                } else {
+                    var properties: vk.PhysicalDeviceProperties = .{};
+                    vk.getPhysicalDeviceProperties(device, &properties);
+                    log.warn("device \"{s}\" is not suitable for this application, skip", .{properties.deviceName});
+                }
             }
         },
     }
@@ -322,8 +308,8 @@ fn pickAndCreateDevice(self: *VulkanContext, stdout: *std.Io.Writer, stdin: *std
     };
 
     // queues
-    var unique_queue_families = self.queue_families.uniqueSetAlloc(self.allocator);
-    defer unique_queue_families.deinit(self.allocator);
+    var unique_queue_families = self.queue_families.uniqueSetAlloc();
+    defer unique_queue_families.deinit(helpers.allocator);
     var queue_infos: [@typeInfo(QueueFamilies).@"struct".fields.len]vk.DeviceQueueCreateInfo = undefined;
     for (unique_queue_families.keys(), 0..) |queue_family, idx| {
         queue_infos[idx] = .{
@@ -374,8 +360,8 @@ fn checkPhysicalDeviceSuitabilities(self: *VulkanContext, device: vk.PhysicalDev
     // check device extensions
     var count: u32 = 0;
     ensureVkSuccess("vkEnumerateDeviceExtensionProperties", vk.enumerateDeviceExtensionProperties(device, null, &count, null)) catch return false;
-    const extensions_properties = ensureAlloc(self.allocator.alloc(vk.ExtensionProperties, count));
-    defer self.allocator.free(extensions_properties);
+    const extensions_properties = ensureAlloc(helpers.allocator.alloc(vk.ExtensionProperties, count));
+    defer helpers.allocator.free(extensions_properties);
     ensureVkSuccess("vkEnumerateDeviceExtensionProperties", vk.enumerateDeviceExtensionProperties(device, null, &count, extensions_properties.ptr)) catch return false;
 
     var success = true;
@@ -391,11 +377,11 @@ fn checkPhysicalDeviceSuitabilities(self: *VulkanContext, device: vk.PhysicalDev
 
     // swapchain info (depende on extension vk.KHR_swapchain_extension_name)
     self.surface_info.extent, self.surface_info.target_swapchain_image_count, self.surface_info.pre_transform = SurfaceInfo.chooseCapabilityStuff(device, self.surface, self.window) catch return false;
-    self.surface_info.format = SurfaceInfo.chooseFormat(self.allocator, device, self.surface) catch return false;
-    self.surface_info.present_mode = SurfaceInfo.choosePresentMode(self.allocator, device, self.surface) catch return false;
+    self.surface_info.format = SurfaceInfo.chooseFormat(device, self.surface) catch return false;
+    self.surface_info.present_mode = SurfaceInfo.choosePresentMode(device, self.surface) catch return false;
 
     // queue families
-    self.queue_families = QueueFamilies.init(self.allocator, device, self.surface) catch return false;
+    self.queue_families = QueueFamilies.init(device, self.surface) catch return false;
 
     return true;
 }
@@ -404,14 +390,14 @@ pub const QueueFamilies = struct {
     compute: u32,
     present: u32,
 
-    fn init(allocator: std.mem.Allocator, device: vk.PhysicalDevice, surface: vk.SurfaceKHR) !QueueFamilies {
+    fn init(device: vk.PhysicalDevice, surface: vk.SurfaceKHR) !QueueFamilies {
         var compute: ?u32 = null;
         var present: ?u32 = null;
 
         var count: u32 = 0;
         vk.getPhysicalDeviceQueueFamilyProperties(device, &count, null);
-        const queue_families_properties = ensureAlloc(allocator.alloc(vk.QueueFamilyProperties, count));
-        defer allocator.free(queue_families_properties);
+        const queue_families_properties = ensureAlloc(helpers.allocator.alloc(vk.QueueFamilyProperties, count));
+        defer helpers.allocator.free(queue_families_properties);
         vk.getPhysicalDeviceQueueFamilyProperties(device, &count, queue_families_properties.ptr);
 
         for (queue_families_properties, 0..) |properties, idx| {
@@ -443,9 +429,9 @@ pub const QueueFamilies = struct {
         return @ptrCast(self);
     }
 
-    pub fn uniqueSetAlloc(self: QueueFamilies, allocator: std.mem.Allocator) std.AutoArrayHashMapUnmanaged(u32, void) {
+    pub fn uniqueSetAlloc(self: QueueFamilies) std.AutoArrayHashMapUnmanaged(u32, void) {
         var set: std.AutoArrayHashMapUnmanaged(u32, void) = .empty;
-        ensureAlloc(set.ensureUnusedCapacity(allocator, @typeInfo(QueueFamilies).@"struct".fields.len));
+        ensureAlloc(set.ensureUnusedCapacity(helpers.allocator, @typeInfo(QueueFamilies).@"struct".fields.len));
         inline for (self.asSlice()) |queue_family| {
             set.putAssumeCapacity(queue_family, undefined);
         }
@@ -489,15 +475,15 @@ pub const SurfaceInfo = struct {
         return .{extent, count, capabilities.currentTransform};
     }
 
-    fn chooseFormat(allocator: std.mem.Allocator, device: vk.PhysicalDevice, surface: vk.SurfaceKHR) !vk.SurfaceFormatKHR {
+    fn chooseFormat(device: vk.PhysicalDevice, surface: vk.SurfaceKHR) !vk.SurfaceFormatKHR {
         var count: u32 = 0;
         try ensureVkSuccess("vkGetPhysicalDeviceSurfaceFormatsKHR", vk.getPhysicalDeviceSurfaceFormatsKHR(device, surface, &count, null));
         if (count == 0) {
             log.err("device does not support any surface formats", .{});
             return error.@"surface format not found";
         }
-        const formats = ensureAlloc(allocator.alloc(vk.SurfaceFormatKHR, count));
-        defer allocator.free(formats);
+        const formats = ensureAlloc(helpers.allocator.alloc(vk.SurfaceFormatKHR, count));
+        defer helpers.allocator.free(formats);
         try ensureVkSuccess("vkGetPhysicalDeviceSurfaceFormatsKHR", vk.getPhysicalDeviceSurfaceFormatsKHR(device, surface, &count, formats.ptr));
 
         const target_format: vk.SurfaceFormatKHR = .{ .format = vk.format_b8g8r8a8_srgb, .colorSpace = vk.color_space_srgb_nonlinear_KHR };
@@ -506,15 +492,15 @@ pub const SurfaceInfo = struct {
         } else formats[0];
     }
 
-    fn choosePresentMode(allocator: std.mem.Allocator, device: vk.PhysicalDevice, surface: vk.SurfaceKHR) !vk.PresentModeKHR {
+    fn choosePresentMode(device: vk.PhysicalDevice, surface: vk.SurfaceKHR) !vk.PresentModeKHR {
         var count: u32 = 0;
         try ensureVkSuccess("vkGetPhysicalDeviceSurfacePresentModesKHR", vk.getPhysicalDeviceSurfacePresentModesKHR(device, surface, &count, null));
         if (count == 0) {
             log.err("device does not support any present modes", .{});
             return error.@"present mode not found";
         }
-        const modes = ensureAlloc(allocator.alloc(vk.PresentModeKHR, count));
-        defer allocator.free(modes);
+        const modes = ensureAlloc(helpers.allocator.alloc(vk.PresentModeKHR, count));
+        defer helpers.allocator.free(modes);
         try ensureVkSuccess("vkGetPhysicalDeviceSurfacePresentModesKHR", vk.getPhysicalDeviceSurfacePresentModesKHR(device, surface, &count, modes.ptr));
 
         const target_mode = vk.present_mode_mailbox_KHR;
@@ -540,8 +526,8 @@ fn createSwapchainStuff(self: *VulkanContext, opts: CreateSwapchainStuffOptions)
     }
 
     // swapchain
-    var unique_queue_families = self.queue_families.uniqueSetAlloc(self.allocator);
-    defer unique_queue_families.deinit(self.allocator);
+    var unique_queue_families = self.queue_families.uniqueSetAlloc();
+    defer unique_queue_families.deinit(helpers.allocator);
     const swapchain_info: vk.SwapchainCreateInfoKHR = .{
         .sType = vk.structure_type_swapchain_create_info_KHR,
         .surface = self.surface,
@@ -566,19 +552,19 @@ fn createSwapchainStuff(self: *VulkanContext, opts: CreateSwapchainStuffOptions)
     // swapchain images
     var count: u32 = 0;
     try ensureVkSuccess("vkGetSwapchainImagesKHR", vk.getSwapchainImagesKHR(self.device, self.swapchain, &count, null));
-    const swapchain_images = ensureAlloc(self.allocator.alloc(vk.Image, count));
-    defer self.allocator.free(swapchain_images);
+    const swapchain_images = ensureAlloc(helpers.allocator.alloc(vk.Image, count));
+    defer helpers.allocator.free(swapchain_images);
     try ensureVkSuccess("vkGetSwapchainImagesKHR", vk.getSwapchainImagesKHR(self.device, self.swapchain, &count, swapchain_images.ptr));
 
     // swapchain image views
-    ensureAlloc(self.swapchain_image_views.ensureUnusedCapacity(self.allocator, count));
+    ensureAlloc(self.swapchain_image_views.ensureUnusedCapacity(helpers.allocator, count));
     errdefer for (self.swapchain_image_views.items) |image_view| vk.destroyImageView(self.device, image_view, null);
     for (swapchain_images) |image| self.swapchain_image_views.appendAssumeCapacity(try self.createImageView(image, self.surface_info.format.format, vk.image_aspect_color_bit, 1));
 }
 
 fn destroySwapchainStuff(self: *VulkanContext, cleanup: bool) void {
     for (self.swapchain_image_views.items) |image_view| vk.destroyImageView(self.device, image_view, null);
-    if (cleanup) { self.swapchain_image_views.clearAndFree(self.allocator); }
+    if (cleanup) { self.swapchain_image_views.clearAndFree(helpers.allocator); }
     else { self.swapchain_image_views.clearRetainingCapacity(); }
 
     if (cleanup) vk.destroySwapchainKHR(self.device, self.swapchain, null);
@@ -636,11 +622,11 @@ pub const SwapchainOperations = struct {
     present_wait_semaphores: std.ArrayList(vk.Semaphore) = .empty,
     present_wait_semaphore_count: u32 = 0,
 
-    fn init(allocator: std.mem.Allocator, device: vk.Device, swapchain_image_count: usize, present_wait_semaphore_count: u32) error {VkNotSuccess}!SwapchainOperations {
+    fn init(device: vk.Device, swapchain_image_count: usize, present_wait_semaphore_count: u32) error {VkNotSuccess}!SwapchainOperations {
         var self: SwapchainOperations = .{};
-        errdefer self.deinit(allocator, device);
-        ensureAlloc(self.image_available_semaphores.ensureUnusedCapacity(allocator, swapchain_image_count));
-        ensureAlloc(self.present_wait_semaphores.ensureUnusedCapacity(allocator, swapchain_image_count * present_wait_semaphore_count));
+        errdefer self.deinit(device);
+        ensureAlloc(self.image_available_semaphores.ensureUnusedCapacity(helpers.allocator, swapchain_image_count));
+        ensureAlloc(self.present_wait_semaphores.ensureUnusedCapacity(helpers.allocator, swapchain_image_count * present_wait_semaphore_count));
 
         self.acquire_image_semaphore = try createSemaphore(device);
         for (0..swapchain_image_count) |_| self.image_available_semaphores.appendAssumeCapacity(try createSemaphore(device));
@@ -649,12 +635,12 @@ pub const SwapchainOperations = struct {
         return self;
     }
 
-    fn deinit(self: *SwapchainOperations, allocator: std.mem.Allocator, device: vk.Device) void {
+    fn deinit(self: *SwapchainOperations, device: vk.Device) void {
         vk.destroySemaphore(device, self.acquire_image_semaphore, null);
         for (self.image_available_semaphores.items) |semaphore| vk.destroySemaphore(device, semaphore, null);
         for (self.present_wait_semaphores.items) |semaphore| vk.destroySemaphore(device, semaphore, null);
-        self.image_available_semaphores.deinit(allocator);
-        self.present_wait_semaphores.deinit(allocator);
+        self.image_available_semaphores.deinit(helpers.allocator);
+        self.present_wait_semaphores.deinit(helpers.allocator);
     }
 
     pub const AcquireResult = struct {

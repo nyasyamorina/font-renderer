@@ -209,24 +209,6 @@ pub const Maxp = extern struct {
     max_component_depth: u16 align(1),
 };
 
-/// note that the length loca table is one more than number of glyphs.
-pub fn readLoca(reader: *std.Io.Reader, index_to_loc_format: Head.IndexToLocFormat, loca: []u32) !void {
-    return switch (index_to_loc_format) {
-        .long => readInts(reader, .big, u32, loca),
-        .short => {
-            const inline_buf = @as([*]u16, @ptrCast(loca))[0 .. loca.len];
-            try readInts(reader, .big, u16, inline_buf);
-
-            var index = loca.len - 1;
-            while (true) {
-                loca[index] = inline_buf[index] * 2;
-                if (index == 0) break;
-                index -= 1;
-            }
-        },
-    };
-}
-
 pub const CmapIndex = extern struct {
     /// Version number (Set to zero)
     version: u16 align(1),
@@ -328,15 +310,15 @@ pub const CmapSubtable = struct {
         /// Variable length array containing subarrays
         glyph_index_array: []u16,
 
-        pub fn initFromReader(allocator: std.mem.Allocator, reader: *std.Io.Reader) !CmapSubtable.Format2 {
-            _ = allocator; _ = reader;
+        pub fn initFromReader(reader: *std.Io.Reader) !CmapSubtable.Format2 {
+            _ = reader;
             @compileError("not impl");
         }
 
-        pub fn deinit(self: *CmapSubtable.Format2, allocator: std.mem.Allocator) void {
-            allocator.free(self.sub_headers);
+        pub fn deinit(self: *CmapSubtable.Format2) void {
+            helpers.allocator.free(self.sub_headers);
             self.sub_headers = undefined;
-            allocator.free(self.glyph_index_array);
+            helpers.allocator.free(self.glyph_index_array);
             self.glyph_index_array = undefined;
         }
     };
@@ -366,7 +348,7 @@ pub const CmapSubtable = struct {
         /// Glyph index array
         glyph_index_array: []u16,
 
-        pub fn initFromReader(allocator: std.mem.Allocator, reader: *std.Io.Reader) !CmapSubtable.Format4 {
+        pub fn initFromReader(reader: *std.Io.Reader) !CmapSubtable.Format4 {
             var self: CmapSubtable.Format4 = undefined;
 
             self.length, self.language = (try reader.takeStruct(extern struct { a: [2]u16 }, .big)).a;
@@ -374,8 +356,8 @@ pub const CmapSubtable = struct {
             std.debug.assert(self.seg_count_x2 & 1 == 0);
             const seg_count = self.seg_count_x2 / 2;
 
-            const data_buf = ensureAlloc(allocator.alloc(u16, self.seg_count_x2 * 2));
-            errdefer allocator.free(data_buf);
+            const data_buf = ensureAlloc(helpers.allocator.alloc(u16, self.seg_count_x2 * 2));
+            errdefer helpers.allocator.free(data_buf);
             self.end_code = data_buf[0..seg_count]; self.start_code = data_buf[seg_count..2*seg_count];
             self.id_delta = data_buf[2*seg_count..3*seg_count]; self.id_range_offset = data_buf[3*seg_count..];
 
@@ -397,18 +379,18 @@ pub const CmapSubtable = struct {
                     max_glyph_index_array_index = @max(max_glyph_index_array_index, @as(u16, @intCast(max_index)));
                 }
             }
-            self.glyph_index_array = try readIntsAlloc(allocator, reader, .big, u16, max_glyph_index_array_index + 1);
+            self.glyph_index_array = try readIntsAlloc(helpers.allocator, reader, .big, u16, max_glyph_index_array_index + 1);
 
             return self;
         }
 
-        pub fn deinit(self: *CmapSubtable.Format4, allocator: std.mem.Allocator) void {
-            allocator.free(self.end_code.ptr[0 .. self.seg_count_x2 * 2]);
+        pub fn deinit(self: *CmapSubtable.Format4) void {
+            helpers.allocator.free(self.end_code.ptr[0 .. self.seg_count_x2 * 2]);
             self.end_code = undefined;
             self.start_code = undefined;
             self.id_delta = undefined;
             self.id_range_offset = undefined;
-            allocator.free(self.glyph_index_array);
+            helpers.allocator.free(self.glyph_index_array);
             self.glyph_index_array = undefined;
         }
 
@@ -430,14 +412,14 @@ pub const CmapSubtable = struct {
             }
         }
 
-        pub fn collectRangeMappingsAlloc(self: CmapSubtable.Format4, allocator: std.mem.Allocator) []CharGlyphMapping.RangeMapping {
+        pub fn collectRangeMappingsAlloc(self: CmapSubtable.Format4) []CharGlyphMapping.RangeMapping {
             var mappings: std.ArrayList(CharGlyphMapping.RangeMapping) = .empty;
-            errdefer mappings.deinit(allocator);
+            errdefer mappings.deinit(helpers.allocator);
 
             for (self.end_code, self.start_code, self.id_delta, self.id_range_offset, 0..) |end_code, start_code, id_delta, id_range_offset, seg_idx| {
                 if (id_range_offset != 0) {
                     const glyph_idx_arr_start = seg_idx + id_range_offset / 2 - self.id_range_offset.len;
-                    ensureAlloc(mappings.ensureUnusedCapacity(allocator, end_code - start_code + 1));
+                    ensureAlloc(mappings.ensureUnusedCapacity(helpers.allocator, end_code - start_code + 1));
                     for (self.glyph_index_array[glyph_idx_arr_start..][0..(end_code - start_code + 1)], 0..) |glyph_offset, char_offset| {
                         mappings.appendAssumeCapacity(.{
                             .end_char = @intCast(start_code + char_offset + 1),
@@ -451,7 +433,7 @@ pub const CmapSubtable = struct {
                     const end_glyph = id_delta +% end_code;
                     if (start_glyph > end_glyph) {
                         const mid_code = -%start_glyph;
-                        ensureAlloc(mappings.ensureUnusedCapacity(allocator, 2));
+                        ensureAlloc(mappings.ensureUnusedCapacity(helpers.allocator, 2));
                         mappings.appendAssumeCapacity(.{
                             .end_char = @as(u32, mid_code) + 1,
                             .char_count = mid_code - start_code + 1,
@@ -463,7 +445,7 @@ pub const CmapSubtable = struct {
                             .end_glyph = end_glyph +% 1,
                         });
                     } else {
-                        ensureAlloc(mappings.append(allocator, .{
+                        ensureAlloc(mappings.append(helpers.allocator, .{
                             .end_char = @as(u32, end_code) + 1,
                             .char_count = end_code - start_code + 1,
                             .end_glyph = end_glyph +% 1,
@@ -472,7 +454,7 @@ pub const CmapSubtable = struct {
                 }
             }
 
-            return ensureAlloc(mappings.toOwnedSlice(allocator));
+            return ensureAlloc(mappings.toOwnedSlice(helpers.allocator));
         }
     };
 
@@ -488,13 +470,13 @@ pub const CmapSubtable = struct {
         /// Array of glyph index values for character codes in the range
         glyph_index_array: []u16,
 
-        pub fn initFromReader(allocator: std.mem.Allocator, reader: *std.Io.Reader) !CmapSubtable.Format6 {
-            _ = allocator; _ = reader;
+        pub fn initFromReader(reader: *std.Io.Reader) !CmapSubtable.Format6 {
+            _ = reader;
             @compileError("not impl");
         }
 
-        pub fn deinit(self: *CmapSubtable.Format6, alloctor: std.mem.Allocator) void {
-            alloctor.free(self.glyph_index_array);
+        pub fn deinit(self: *CmapSubtable.Format6) void {
+            helpers.alloctor.free(self.glyph_index_array);
             self.glyph_index_array = undefined;
         }
     };
@@ -518,13 +500,13 @@ pub const CmapSubtable = struct {
             start_glyph_code: u32 align(1),
         };
 
-        pub fn initFromReader(allocator: std.mem.Allocator, reader: *std.Io.Reader) !CmapSubtable.Format8 {
-            _ = allocator; _ = reader;
+        pub fn initFromReader(reader: *std.Io.Reader) !CmapSubtable.Format8 {
+            _ = reader;
             @compileError("not impl");
         }
 
-        pub fn deinit(self: *CmapSubtable.Format8, allocator: std.mem.Allocator) void {
-            allocator.free(self.groups);
+        pub fn deinit(self: *CmapSubtable.Format8) void {
+            helpers.allocator.free(self.groups);
             self.groups = undefined;
         }
     };
@@ -540,13 +522,13 @@ pub const CmapSubtable = struct {
         /// Array of glyph indices for the character codes covered
         glyphs: []u16,
 
-        pub fn initFormReader(allocator: std.mem.Allocator, reader: *std.Io.Reader) !CmapSubtable.Format10 {
-            _ = allocator; _ = reader;
+        pub fn initFormReader(reader: *std.Io.Reader) !CmapSubtable.Format10 {
+            _ = reader;
             @compileError("not impl");
         }
 
-        pub fn deinit(self: *CmapSubtable.Format10, allocator: std.mem.Allocator) void {
-            allocator.free(self.glyphs);
+        pub fn deinit(self: *CmapSubtable.Format10) void {
+            helpers.allocator.free(self.glyphs);
             self.glyphs = undefined;
         }
     };
@@ -569,14 +551,14 @@ pub const CmapSubtable = struct {
             start_glyph_code: u32 align(1),
         };
 
-        pub fn initFromReader(allocator: std.mem.Allocator, reader: *std.Io.Reader) !CmapSubtable.Format12 {
+        pub fn initFromReader(reader: *std.Io.Reader) !CmapSubtable.Format12 {
             var self: CmapSubtable.Format12 = undefined;
 
             try reader.discardAll(@sizeOf(u16));
             self.length, self.language, const n_groups = (try reader.takeStruct(extern struct { a: [3]u32 }, .big)).a;
 
-            self.groups = ensureAlloc(allocator.alloc(Group, n_groups));
-            errdefer allocator.free(self.groups);
+            self.groups = ensureAlloc(helpers.allocator.alloc(Group, n_groups));
+            errdefer helpers.allocator.free(self.groups);
             try reader.readSliceAll(@as([*]u8, @ptrCast(self.groups))[0 .. @sizeOf(Group) * n_groups]);
             if (native_endian == .little) std.mem.byteSwapAllElements(Group, self.groups);
             for (self.groups[0..n_groups-1], self.groups[1..]) |left, right| std.debug.assert(left.end_char_code < right.end_char_code);
@@ -585,8 +567,8 @@ pub const CmapSubtable = struct {
             return self;
         }
 
-        pub fn deinit(self: *CmapSubtable.Format12, allocator: std.mem.Allocator) void {
-            allocator.free(self.groups);
+        pub fn deinit(self: *CmapSubtable.Format12) void {
+            helpers.allocator.free(self.groups);
             self.groups = undefined;
         }
 
@@ -598,8 +580,9 @@ pub const CmapSubtable = struct {
             } else 0;
         }
 
-        pub fn collectRangeMappingsAlloc(self: CmapSubtable.Format12, allocator: std.mem.Allocator) []CharGlyphMapping.RangeMapping {
-            const mappings = ensureAlloc(allocator.alloc(CharGlyphMapping.RangeMapping, self.groups.len));
+        pub fn collectRangeMappingsAlloc(self: CmapSubtable.Format12) []CharGlyphMapping.RangeMapping {
+            const mappings = ensureAlloc(helpers.allocator.alloc(CharGlyphMapping.RangeMapping, self.groups.len));
+            errdefer helpers.allocator.free(mappings);
             for (self.groups, mappings) |group, *mapping| {
                 mapping.* = .{
                     .end_char = group.end_char_code + 1,
@@ -639,13 +622,13 @@ pub const CmapSubtable = struct {
             non_default_uvs_offset: u32 align(1),
         };
 
-        pub fn initFromReader(allocator: std.mem.Allocator, reader: *std.Io.Reader) !CmapSubtable.Format14 {
-            _ = allocator; _ = reader;
+        pub fn initFromReader(reader: *std.Io.Reader) !CmapSubtable.Format14 {
+            _ = reader;
             @compileError("not impl");
         }
 
-        pub fn deinit(self: *CmapSubtable.Format14, allocator: std.mem.Allocator) void {
-            allocator.free(self.var_selector_records);
+        pub fn deinit(self: *CmapSubtable.Format14) void {
+            helpers.allocator.free(self.var_selector_records);
             self.var_selector_records = undefined;
         }
     };
@@ -737,40 +720,40 @@ pub const SimpleGlyph = struct {
         _reserved: u2,
     };
 
-    pub fn initFromReader(allocator: std.mem.Allocator, reader: *std.Io.Reader, contours_count: u16) !SimpleGlyph {
+    pub fn initFromReader(reader: *std.Io.Reader, contours_count: u16) !SimpleGlyph {
         std.debug.assert(contours_count > 0);
         var self: SimpleGlyph = undefined;
 
-        self.end_pts_of_contours = try readIntsAlloc(allocator, reader, .big, u16, contours_count);
-        errdefer allocator.free(self.end_pts_of_contours);
+        self.end_pts_of_contours = try readIntsAlloc(helpers.allocator, reader, .big, u16, contours_count);
+        errdefer helpers.allocator.free(self.end_pts_of_contours);
         ensureMonoIncrease(u16, self.end_pts_of_contours);
         const point_count = @as(u32, self.end_pts_of_contours[contours_count - 1]) + 1;
 
         const instruction_length = try reader.takeInt(u16, .big);
-        self.instructions = try readIntsAlloc(allocator, reader, .big, u8, instruction_length);
-        errdefer allocator.free(self.instructions);
+        self.instructions = try readIntsAlloc(helpers.allocator, reader, .big, u8, instruction_length);
+        errdefer helpers.allocator.free(self.instructions);
 
         var flags: std.ArrayList(OutlineFlags) = .empty;
-        defer flags.deinit(allocator);
+        defer flags.deinit(helpers.allocator);
         while (flags.items.len < point_count) {
             const flag: OutlineFlags = @bitCast(try reader.takeByte());
             if (flag.repeat) {
                 const repeat = try reader.takeByte();
-                ensureAlloc(flags.appendNTimes(allocator, flag, @as(u16, repeat) + 1));
+                ensureAlloc(flags.appendNTimes(helpers.allocator, flag, @as(u16, repeat) + 1));
             } else {
-                ensureAlloc(flags.append(allocator, flag));
+                ensureAlloc(flags.append(helpers.allocator, flag));
             }
         }
         std.debug.assert(flags.items.len == point_count);
 
-        self.on_curve = ensureAlloc(std.DynamicBitSetUnmanaged.initEmpty(allocator, point_count));
-        errdefer self.on_curve.deinit(allocator);
+        self.on_curve = ensureAlloc(std.DynamicBitSetUnmanaged.initEmpty(helpers.allocator, point_count));
+        errdefer self.on_curve.deinit(helpers.allocator);
         for (flags.items, 0..) |flag, idx| {
             if (flag.on_curve) self.on_curve.set(idx);
         }
 
-        self.coordinates = ensureAlloc(allocator.alloc(Glyph.Contour.Point, point_count));
-        errdefer allocator.free(self.coordinates);
+        self.coordinates = ensureAlloc(helpers.allocator.alloc(Glyph.Contour.Point, point_count));
+        errdefer helpers.allocator.free(self.coordinates);
         // x
         var x_abs: i16 = 0;
         for (flags.items, self.coordinates) |flag, *pos| {
@@ -797,13 +780,13 @@ pub const SimpleGlyph = struct {
         return self;
     }
 
-    pub fn deinit(self: *SimpleGlyph, allocator: std.mem.Allocator) void {
-        allocator.free(self.end_pts_of_contours);
+    pub fn deinit(self: *SimpleGlyph) void {
+        helpers.allocator.free(self.end_pts_of_contours);
         self.end_pts_of_contours = undefined;
-        allocator.free(self.instructions);
+        helpers.allocator.free(self.instructions);
         self.instructions = undefined;
-        self.on_curve.deinit(allocator);
-        allocator.free(self.coordinates);
+        self.on_curve.deinit(helpers.allocator);
+        helpers.allocator.free(self.coordinates);
         self.coordinates = undefined;
     }
 };
@@ -866,21 +849,21 @@ pub const ComponentGlyph = struct {
         }
     };
 
-    pub fn initFromReader(allocator: std.mem.Allocator, reader: *std.Io.Reader) !ComponentGlyph {
+    pub fn initFromReader(reader: *std.Io.Reader) !ComponentGlyph {
         var self: ComponentGlyph = undefined;
 
         var parts: std.ArrayList(PartDescription) = .empty;
-        defer parts.deinit(allocator);
+        defer parts.deinit(helpers.allocator);
         while (true) {
-            ensureAlloc(parts.append(allocator, try .initFromReader(reader)));
+            ensureAlloc(parts.append(helpers.allocator, try .initFromReader(reader)));
             if (!parts.getLast().flag.more_components) break;
         }
 
         self.instructions = &.{};
-        errdefer allocator.free(self.instructions);
+        errdefer helpers.allocator.free(self.instructions);
         if (parts.getLast().flag.we_have_instructions) {
             const instruction_count = try reader.takeInt(u16, .big);
-            self.instructions = try reader.readAlloc(allocator, instruction_count);
+            self.instructions = try reader.readAlloc(helpers.allocator, instruction_count);
         }
 
         if (helpers.in_safe_mode) {
@@ -897,14 +880,14 @@ pub const ComponentGlyph = struct {
             } else null;
         }
 
-        self.parts = ensureAlloc(parts.toOwnedSlice(allocator));
+        self.parts = ensureAlloc(parts.toOwnedSlice(helpers.allocator));
         return self;
     }
 
-    pub fn deinit(self: *ComponentGlyph, allocator: std.mem.Allocator) void {
-        allocator.free(self.parts);
+    pub fn deinit(self: *ComponentGlyph) void {
+        helpers.allocator.free(self.parts);
         self.parts = undefined;
-        allocator.free(self.instructions);
+        helpers.allocator.free(self.instructions);
         self.instructions = undefined;
     }
 };
