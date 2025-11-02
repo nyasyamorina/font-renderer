@@ -4,6 +4,7 @@ const std = @import("std");
 const CharGlyphMapping = @import("CharGlyphMapping.zig");
 const Glyph = @import("Glyph.zig");
 const helpers = @import("../helpers.zig");
+pub const i2d14 = helpers.FixedPointNumber(i16, 14);
 
 const ensureAlloc = helpers.ensureAlloc;
 const ensureMonoIncrease = helpers.ensureMonoIncrease;
@@ -801,7 +802,7 @@ pub const ComponentGlyph = struct {
         glyph_index: u16,
         argument1: u16,
         argument2: u16,
-        transformation: [4]i16,
+        transformation: [4]i2d14,
 
         pub const ComponentFlag = packed struct(u16) {
             arg_1_and_arg_2_are_words: bool,
@@ -833,16 +834,16 @@ pub const ComponentGlyph = struct {
             if (self.flag.we_have_a_scale) {
                 std.debug.assert(!self.flag.we_have_an_x_and_y_scale);
                 std.debug.assert(!self.flag.we_have_a_two_by_two);
-                const s = try reader.takeInt(i16, .big);
-                self.transformation = .{s, 0, 0, s};
+                const s: i2d14 = .{ .data = try reader.takeInt(i16, .big) };
+                self.transformation = .{s, .zero, .zero, s};
             } else if (self.flag.we_have_an_x_and_y_scale) {
                 std.debug.assert(!self.flag.we_have_a_two_by_two);
-                const x, const y = (try reader.takeStruct(extern struct { a: [2]i16 }, .big)).a;
-                self.transformation = .{x, 0, 0, y};
+                const x, const y = (try reader.takeStruct(extern struct { a: [2]i2d14 }, .big)).a;
+                self.transformation = .{x, .zero, .zero, y};
             } else if (self.flag.we_have_a_two_by_two) {
-                self.transformation = (try reader.takeStruct( extern struct { a: [4]i16 }, .big)).a;
+                self.transformation = (try reader.takeStruct( extern struct { a: [4]i2d14 }, .big)).a;
             } else {
-                self.transformation = .{1, 0, 0, 1};
+                self.transformation = .{.one, .zero, .zero, .one};
             }
 
             return self;

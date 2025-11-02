@@ -4,6 +4,7 @@ const Glyph = @This();
 const helpers = @import("../helpers.zig");
 const log = std.log.scoped(.Glyph);
 const ttf = @import("ttf.zig");
+const i18d14 = helpers.FixedPointNumber(i32, 14);
 
 const ensureAlloc = helpers.ensureAlloc;
 
@@ -95,6 +96,8 @@ pub fn initEmpty(description: ttf.GlyphDescription) Glyph {
 }
 
 pub fn initTTFSimple(description: ttf.GlyphDescription, data: ttf.SimpleGlyph) !Glyph {
+    if (data.instructions.len > 0) @panic("not impl"); // TODO:
+
     const contours = ensureAlloc(helpers.allocator.alloc(Contour, data.end_pts_of_contours.len));
     errdefer helpers.allocator.free(contours);
     const points = ensureAlloc(helpers.allocator.alloc(Contour.Point, Contour.countTTFPoints(data)));
@@ -117,15 +120,61 @@ pub fn initTTFSimple(description: ttf.GlyphDescription, data: ttf.SimpleGlyph) !
 }
 
 pub fn initTTFComponent(description: ttf.GlyphDescription, data: ttf.ComponentGlyph, glyphs: []const ?Glyph) !Glyph {
-    _ = data; _ = glyphs;
-    // TODO: 123
+    if (data.instructions.len > 0) @panic("not impl"); // TODO:
+    if (data.matrics_index != null) @panic("not impl"); // TODO:
+
+    const contour_count, const point_count = blk: {
+        var p: usize = 0;
+        var c: usize = 0;
+        for (data.parts) |part| {
+            const part_glyph = glyphs[part.glyph_index].?;
+            c += part_glyph.contours.len;
+            for (part_glyph.contours) |contour| {
+                p += contour.points.len;
+            }
+        }
+        break :blk .{c, p};
+    };
+
+    const contours = ensureAlloc(helpers.allocator.alloc(Contour, contour_count));
+    errdefer helpers.allocator.free(contours);
+    const points = ensureAlloc(helpers.allocator.alloc(Contour.Point, point_count));
+    errdefer helpers.allocator.free(points);
+
+    var next_contour: usize = 0;
+    var empty_list = points;
+    for (data.parts) |part| {
+        const part_glyph = glyphs[part.glyph_index].?;
+        if (!part.flag.args_are_xy_values) @panic("not impl"); // TODO:
+
+        for (part_glyph.contours) |contour| {
+            for (contour.points, 0..) |point, idx| {
+                const x = transform1(point.x, point.y, part.transformation[0], part.transformation[2], @bitCast(part.argument1));
+                const y = transform1(point.x, point.y, part.transformation[1], part.transformation[3], @bitCast(part.argument2));
+
+                empty_list[idx] = if (part.flag.round_xy_to_grid)
+                    .{ .x = x.roundToInt(i16), .y = y.roundToInt(i16) }
+                else blk: {
+                    const x_grid = x.toInt(i16);
+                    const y_grid = y.toInt(i16);
+                    if (x.cmp(.init(x_grid)) != .eq) @panic("not impl"); // TODO:
+                    if (y.cmp(.init(y_grid)) != .eq) @panic("not impl");
+                    break :blk .{ .x = x_grid, .y = y_grid };
+                };
+            }
+
+            contours[next_contour] = .{ .points = empty_list[0..contour.points.len] };
+            empty_list = empty_list[contour.points.len ..];
+            next_contour += 1;
+        }
+    }
 
     return .{
         .box = .{
             .x_min = description.x_min, .y_min = description.y_min,
             .x_max = description.x_max, .y_max = description.y_max,
         },
-        .contours = &.{},
+        .contours = contours,
     };
 }
 
@@ -137,5 +186,12 @@ pub fn deinit(self: *Glyph) void {
     }
     helpers.allocator.free(self.contours);
     self.contours = undefined;
+}
+
+
+fn transform1(x: i16, y: i16, a_or_b: ttf.i2d14, c_or_d: ttf.i2d14, e_or_f: i16) i18d14 {
+    const tmp: i32 = @max(@abs(a_or_b.data), @abs(c_or_d.data));
+    const shift = e_or_f << @intFromBool(@abs(@as(i16, @bitCast(@abs(a_or_b.data) -% @abs(c_or_d.data)))) <= 8);
+    return .{ .data = @as(i32, a_or_b.data) * @as(i32, x) + @as(i32, c_or_d.data) * @as(i32, y) + tmp * shift };
 }
 

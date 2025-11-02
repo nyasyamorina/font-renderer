@@ -59,8 +59,11 @@ pub fn ensureMonoIncrease(comptime T: type, arr: []const T) void {
 
 pub fn FixedPointNumber(comptime T: type, comptime _bias_bits: comptime_int) type {
     std.debug.assert(_bias_bits >= 0);
-    return struct {
+    return extern struct {
         data: @This().Data,
+
+        pub const zero: @This() = .init(0);
+        pub const one: @This() = .init(1);
 
         pub const Data = T;
         pub const bias_bits = _bias_bits;
@@ -76,9 +79,49 @@ pub fn FixedPointNumber(comptime T: type, comptime _bias_bits: comptime_int) typ
             break :blk b;
         };
 
+        pub fn init(value: anytype) @This() {
+            switch (@typeInfo(@TypeOf(value))) {
+                .comptime_int => {
+                    return .{ .data = @intCast(value << bias_bits) };
+                },
+                .int => |info| {
+                    comptime std.debug.assert(info.bits - (if (info.signedness == .signed) 1 else 0) > bias_bits);
+                    const tmp: Data = @intCast(value);
+                    const ov = @shlWithOverflow(tmp, bias_bits);
+                    if (ov.@"1" != 0) unreachable;
+                    return .{ .data = ov.@"0" };
+                },
+                .comptime_float, .float => {
+                    const tmp = value / bias;
+                    return .{ .data = @intFromFloat(tmp) };
+                },
+                else => @compileError(@typeName(@TypeOf(value)) ++ " cannot be convert to " ++ @typeName(@This())),
+            }
+        }
+
+        /// discard the decimal part
+        pub fn toInt(self: @This(), comptime Int: type) Int {
+            return @intCast(self.data >> bias_bits);
+        }
+
         pub fn toFloat(self: @This(), comptime F: type) F {
             const f: F = @floatFromInt(self.data);
             return f * @This().bias;
+        }
+
+        pub fn roundToInt(self: @This(), comptime Int: type) Int {
+            if (bias_bits == 0) return @intCast(self.data);
+            const base: Int = @intCast(self.data >> bias_bits);
+            if (self.data < 0) {
+                if (self.data == std.math.minInt(Data)) return base;
+                return if ((-self.data) & (@as(Data, 1) << (bias_bits - 1)) == 0) base else base - 1;
+            } else {
+                return if (self.data & (@as(Data, 1) << (bias_bits - 1)) == 0) base else base + 1;
+            }
+        }
+
+        pub fn cmp(self: @This(), other: @This()) std.math.Order {
+            return if (self.data < other.data) .lt else if (self.data > other.data) .gt else .eq;
         }
     };
 }

@@ -60,6 +60,15 @@ pub fn deinit(self: *CharGlyphMapping) void {
     self.mappings = undefined;
 }
 
+pub fn getChar(self: CharGlyphMapping, glyph: u16) ?u32 {
+    for (self.mappings) |mapping| {
+        if (glyph < mapping.end_glyph and mapping.end_glyph - glyph <= mapping.char_count) {
+            return mapping.end_char - (mapping.end_glyph - glyph);
+        }
+    }
+    return null;
+}
+
 pub fn getGlyph(self: CharGlyphMapping, char: u32) u16 {
     if (self.branches[0].order(char) != .in_range) return 0;
     var branch_idx: u16 = 0;
