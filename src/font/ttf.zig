@@ -4,6 +4,7 @@ const std = @import("std");
 const CharGlyphMapping = @import("CharGlyphMapping.zig");
 const Glyph = @import("Glyph.zig");
 const helpers = @import("../helpers.zig");
+const Point = @import("../tools/geometry.zig").Point(i16);
 pub const i2d14 = helpers.FixedPointNumber(i16, 14);
 
 const ensureAlloc = helpers.ensureAlloc;
@@ -702,7 +703,7 @@ pub const SimpleGlyph = struct {
     /// Otherwise, it is off the curve.
     on_curve: std.DynamicBitSetUnmanaged,
     /// Array of abdolut coordinates;
-    coordinates: []Glyph.Contour.Point,
+    coordinates: []Point,
 
     pub const OutlineFlags = packed struct(u8) {
         /// If set, the point is on the curve;
@@ -753,7 +754,7 @@ pub const SimpleGlyph = struct {
             if (flag.on_curve) self.on_curve.set(idx);
         }
 
-        self.coordinates = ensureAlloc(helpers.allocator.alloc(Glyph.Contour.Point, point_count));
+        self.coordinates = ensureAlloc(helpers.allocator.alloc(Point, point_count));
         errdefer helpers.allocator.free(self.coordinates);
         // x
         var x_abs: i16 = 0;

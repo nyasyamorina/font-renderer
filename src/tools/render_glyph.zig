@@ -18,8 +18,8 @@ pub fn renderGlyph(glyph: Glyph, font_info: Font.Information, font_size: u16) !I
     const height: u16 = @intCast(@as(i16, max_corner[1]) - min_corner[1] + 1);
     if (!font_info.y0_baseline) log.warn("y=0 is not font baseline is not consider yet", .{});
 
-    var im: Image.Gray = .init(helpers.allocator, width, height);
-    errdefer im.deinit(helpers.allocator);
+    var im: Image.Gray = .init(width, height);
+    errdefer im.deinit();
     for (0..height) |y| {
         for (0..width) |x| {
             const coord_x = @as(f32, @floatFromInt(min_corner[0] + @as(i16, @intCast(x)))) / scale;

@@ -29,21 +29,13 @@ swapchain_operations: SwapchainOperations = .{},
 
 pub const max_frames_in_flight = 2;
 
-pub const InitError = error {
-    VkNotSuccess,
-    @"Failed to create window",
-    @"Not support all instance extensions",
-    @"Not support all instance layers",
-    @"Failed to get instance proc addr",
-    @"No suitable device available",
-} || CreateSwapchainStuffError || std.Io.Writer.Error || std.Io.Reader.DelimiterError;
 
-pub fn init(window_size: vk.Extent2D) InitError!VulkanContext {
+pub fn init(window_size: vk.Extent2D, window_title: [*:0]const u8) !VulkanContext {
     var self: VulkanContext = .{};
 
-    try self.createWindow(window_size);
+    try self.createWindow(window_size, window_title);
     errdefer glfw.destroyWindow(self.window);
-    try self.createInstanceAndDebugMessenger();
+    try self.createInstanceAndDebugMessenger(window_title);
     errdefer self.destroyInstanceAndDebugMessenger();
     try ensureVkSuccess("glfwCreateWindowSurface", glfw.createWindowSurface(self.instance, self.window, null, &self.surface));
     errdefer vk.destroySurfaceKHR(self.instance, self.surface, null);
@@ -81,24 +73,20 @@ pub fn mainLoop(self: *VulkanContext) MainLoopError!void {
 }
 
 
-pub const window_title = "ZigVkSoftRayTracing";
-pub const window_init_width = 800;
-pub const window_init_height = 600;
-
-fn createWindow(self: *VulkanContext, window_size: vk.Extent2D) InitError!void {
+fn createWindow(self: *VulkanContext, window_size: vk.Extent2D, window_title: [*:0]const u8) !void {
     glfw.windowHint(glfw.client_api, glfw.no_api);
     glfw.windowHint(glfw.resizable, glfw.@"false");
 
     self.window = glfw.createWindow(@intCast(window_size.width), @intCast(window_size.height), window_title, null, null);
-    if (self.window == null) return InitError.@"Failed to create window";
+    if (self.window == null) return error.FailedToCreateWindow;
 }
 
 
-fn createInstanceAndDebugMessenger(self: *VulkanContext) InitError!void {
+fn createInstanceAndDebugMessenger(self: *VulkanContext, appli_name: [*:0]const u8) !void {
     // App Info
     const app_info: vk.ApplicationInfo = .{
         .sType = vk.structure_type_application_info,
-        .pApplicationName = window_title,
+        .pApplicationName = appli_name,
         .applicationVersion = vk.makeVersion(1, 0, 0),
         .pEngineName = "NoEngine",
         .engineVersion = vk.makeVersion(1, 0, 0),
@@ -145,7 +133,7 @@ fn createInstanceAndDebugMessenger(self: *VulkanContext) InitError!void {
                 supported = false;
             }
         }
-        if (!supported) return InitError.@"Not support all instance extensions";
+        if (!supported) return error.NotSupportAllInstanceExtensions;
     }
 
     // All layers supported?
@@ -164,7 +152,7 @@ fn createInstanceAndDebugMessenger(self: *VulkanContext) InitError!void {
                 supported = false;
             }
         }
-        if (!supported) return InitError.@"Not support all instance layers";
+        if (!supported) return error.NotSupportAllInstanceLayers;
     }
 
     const instance_info: vk.InstanceCreateInfo = .{
@@ -183,7 +171,7 @@ fn createInstanceAndDebugMessenger(self: *VulkanContext) InitError!void {
         const fn_create: vk.PFN_createDebugUtilsMessengerEXT = @ptrCast(vk.getInstanceProcAddr(self.instance, vk.name_createDebugUtilsMessengerEXT));
         if (fn_create) |create| {
             try ensureVkSuccess("vkCreateDebugUtilsMessengerEXT", create(self.instance, &debug_info, null, &self.debug_messenger));
-        } else return InitError.@"Failed to get instance proc addr";
+        } else return error.FailedToGetInstanceProcAddr;
     }
 }
 
@@ -260,14 +248,14 @@ pub const device_extensions = [_][*:0]const u8 {
     vk.KHR_synchronization_2_extension_name,
 };
 
-fn pickAndCreateDevice(self: *VulkanContext) InitError!void {
+fn pickAndCreateDevice(self: *VulkanContext) !void {
     // select physical device
     var count: u32 = 0;
     try ensureVkSuccess("vkEnumeratePhysicalDevices", vk.enumeratePhysicalDevices(self.instance, &count, null));
     switch (count) {
         0 => {
             log.err("vulkan supported device not found", .{});
-            return InitError.@"No suitable device available";
+            return error.NoSuitableDeviceAvailable;
         },
         1 => {
             try ensureVkSuccess("vkEnumeratePhysicalDevices", vk.enumeratePhysicalDevices(self.instance, &count, &self.physical_device));
@@ -275,7 +263,7 @@ fn pickAndCreateDevice(self: *VulkanContext) InitError!void {
                 var properties: vk.PhysicalDeviceProperties = .{};
                 vk.getPhysicalDeviceProperties(self.physical_device, &properties);
                 log.err("the only vulkan supported device: \"{s}\" is not suitable for this application", .{properties.deviceName});
-                return InitError.@"No suitable device available";
+                return error.NoSuitableDeviceAvailable;
             }
         },
         else => {
@@ -293,6 +281,9 @@ fn pickAndCreateDevice(self: *VulkanContext) InitError!void {
                     vk.getPhysicalDeviceProperties(device, &properties);
                     log.warn("device \"{s}\" is not suitable for this application, skip", .{properties.deviceName});
                 }
+            } else {
+                log.err("all devices are not suitable for this application", .{});
+                return error.NoSuitableDeviceAvailable;
             }
         },
     }

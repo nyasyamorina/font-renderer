@@ -5,7 +5,9 @@ const Config = @import("Config.zig");
 const Font = @import("font/Font.zig");
 const glfw = @import("c/glfw.zig");
 const helpers = @import("helpers.zig");
+const Image = @import("tools/Image.zig");
 const qoi = @import("tools/qoi.zig");
+const TriangulatedGlyph = @import("tools/TriangulatedGlyph.zig");
 const renderGlyph = @import("tools/render_glyph.zig").renderGlyph;
 
 pub var gpa = if (helpers.in_safe_mode) std.heap.DebugAllocator(.{}).init else @as(void, undefined);
@@ -29,17 +31,33 @@ pub fn main() !void {
     var font: Font = try .initTTF(ttf_file, 1024);
     defer font.deinit();
 
-    try renderGlyphToQoi(&font, 'α', 600, "playground/out.qoi");
+    const glyph = try font.getGlyph('α');
 
-    var appli: Appli = try .init(.{ .width = 800, .height = 600 });
+    try renderActualGlyphToQoi(glyph, "playground/winding.qoi");
+
+    var appli: Appli = try .init(.{ .width = 800, .height = 600 }, "font renderer");
     defer appli.deinit();
 }
 
-fn renderGlyphToQoi(font: *Font, char: u32, font_size: u16, qoi_filepath: []const u8) !void {
-    const glyph = try font.getGlyph(char);
+fn renderActualGlyphToQoi(glyph: Font.Glyph, qoi_filepath: []const u8) !void {
+    var glyph_info = TriangulatedGlyph.GlyphInfo.init(glyph);
+    defer glyph_info.deinit();
 
-    var im = try renderGlyph(glyph, font.information, font_size);
-    defer im.deinit(helpers.allocator);
+    var im: Image.GlyphDebug = .init(glyph.box, 20, 150, .{255, 255, 0}, .{0, 255, 255});
+    defer im.rgb.deinit();
+
+    var h: u16 = 0;
+    while (h < im.rgb.height) : (h += 1) {
+        var w: u16 = 0;
+        while (w < im.rgb.width) : (w += 1) {
+            const idx = h * im.rgb.width + w;
+            const y = glyph.box.y_max - @as(i16, @intCast(h)) + 1;
+            const x = glyph.box.x_min + @as(i16, @intCast(w)) - 1;
+            const winding = TriangulatedGlyph.windingInGlyph(glyph, glyph_info, .{ .x = x, .y = y });
+            im.setWindingLinear(idx, winding);
+        }
+    }
+    im.setGlyphPoints(glyph);
 
     const qoi_file = try std.fs.cwd().createFile(qoi_filepath, .{});
     defer qoi_file.close();
@@ -48,6 +66,6 @@ fn renderGlyphToQoi(font: *Font, char: u32, font_size: u16, qoi_filepath: []cons
     var qoi_writer = qoi_file.writer(&buf);
     defer qoi_writer.interface.flush() catch {};
 
-    try qoi.saveRGB(&qoi_writer.interface, &im.interface);
+    try qoi.saveRGB(&qoi_writer.interface, &im.rgb.interface);
 }
 

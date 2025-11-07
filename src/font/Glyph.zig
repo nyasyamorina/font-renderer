@@ -4,6 +4,7 @@ const Glyph = @This();
 const helpers = @import("../helpers.zig");
 const log = std.log.scoped(.Glyph);
 const ttf = @import("ttf.zig");
+const Point = @import("../tools/geometry.zig").Point(i16);
 const i18d14 = helpers.FixedPointNumber(i32, 14);
 
 const ensureAlloc = helpers.ensureAlloc;
@@ -23,18 +24,6 @@ pub const Box = struct {
 pub const Contour = struct {
     /// the even-index points are on-curve, the odd-index points are not. and the last point is the same point as the first one.
     points: []Point,
-
-    pub const Point = struct {
-        x: i16,
-        y: i16,
-
-        pub fn initMiddle(prev: Point, next: Point) Point {
-            const p: @Vector(2, i32) = .{prev.x, prev.y};
-            const n: @Vector(2, i32) = .{next.x, next.y};
-            const m = (p + n) / @as(@TypeOf(p), @splat(2));
-            return .{ .x = @truncate(m[0]), .y = @truncate(m[1]) };
-        }
-    };
 
     pub fn countTTFPoints(data: ttf.SimpleGlyph) u16 {
         var count: u16 = @intCast(data.end_pts_of_contours.len);
@@ -100,7 +89,7 @@ pub fn initTTFSimple(description: ttf.GlyphDescription, data: ttf.SimpleGlyph) !
 
     const contours = ensureAlloc(helpers.allocator.alloc(Contour, data.end_pts_of_contours.len));
     errdefer helpers.allocator.free(contours);
-    const points = ensureAlloc(helpers.allocator.alloc(Contour.Point, Contour.countTTFPoints(data)));
+    const points = ensureAlloc(helpers.allocator.alloc(Point, Contour.countTTFPoints(data)));
     errdefer helpers.allocator.free(points);
 
     var empty_point_buf = points;
@@ -138,7 +127,7 @@ pub fn initTTFComponent(description: ttf.GlyphDescription, data: ttf.ComponentGl
 
     const contours = ensureAlloc(helpers.allocator.alloc(Contour, contour_count));
     errdefer helpers.allocator.free(contours);
-    const points = ensureAlloc(helpers.allocator.alloc(Contour.Point, point_count));
+    const points = ensureAlloc(helpers.allocator.alloc(Point, point_count));
     errdefer helpers.allocator.free(points);
 
     var next_contour: usize = 0;
