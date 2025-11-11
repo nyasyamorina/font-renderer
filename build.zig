@@ -29,6 +29,8 @@ pub fn build(b: *std.Build) !void {
     exe.root_module.linkSystemLibrary("glfw3", .{});
     if (is_windows) b.installBinFile("third-party/glfw-3.4/lib/glfw3.dll", "bin/glfw3.dll");
 
+    try compileSlangShader(b, exe, "shader.slang", &.{"vertMain", "concaveMain", "convexMain"});
+
     b.installArtifact(exe);
 
 
@@ -40,3 +42,21 @@ pub fn build(b: *std.Build) !void {
     });
     check.dependOn(&exe_check.step);
 }
+
+fn compileSlangShader(b: *std.Build, exe: *std.Build.Step.Compile, name: []const u8, enties: []const []const u8) !void {
+    const src_in = try std.fmt.allocPrint(b.allocator, "src/shaders/{s}", .{name});
+    const build_out = try std.fmt.allocPrint(b.allocator, "{s}.spv", .{name});
+
+    var build_shader = b.addSystemCommand(&.{ "slangc" }); // should be in VULKAN_SDK
+    build_shader.addFileArg(b.path(src_in));
+    build_shader.addArgs(&.{"-target", "spirv"});
+    build_shader.addArgs(&.{"-profile", "spirv_1_4"});
+    build_shader.addArg("-emit-spirv-directly");
+    build_shader.addArg("-fvk-use-entrypoint-name");
+    for (enties) |entry| build_shader.addArgs(&.{"-entry", entry});
+    build_shader.addArg("-o");
+    const spv = build_shader.addOutputFileArg(build_out);
+
+    exe.root_module.addAnonymousImport(name, .{ .root_source_file = spv });
+}
+

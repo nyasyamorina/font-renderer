@@ -31,41 +31,25 @@ pub fn main() !void {
     var font: Font = try .initTTF(ttf_file, 1024);
     defer font.deinit();
 
-    const glyph = try font.getGlyph('α');
+    const glyph = try font.getGlyph('δ');
+    std.debug.print("glyph box: {any}\n", .{glyph.box});
+    var triangle_glyph: TriangulatedGlyph = .init(glyph);
+    defer triangle_glyph.deinit();
 
-    try renderActualGlyphToQoi(glyph, "playground/winding.qoi");
+    //var glyph_debug: Image.GlyphDebug = .render(glyph, 50);
+    //defer glyph_debug.rgb.deinit();
+    //const qoi_file = try std.fs.cwd().createFile("playground/glyph_debug.qoi", .{});
+    //defer qoi_file.close();
+    //const qoi_buf = helpers.ensureAlloc(helpers.allocator.alloc(u8, 4096));
+    //defer helpers.allocator.free(qoi_buf);
+    //var qoi_writer = qoi_file.writer(qoi_buf);
+    //defer qoi_writer.interface.flush() catch {};
+    //try qoi.saveRGB(&qoi_writer.interface, &glyph_debug.rgb.interface);
 
-    var appli: Appli = try .init(.{ .width = 800, .height = 600 }, "font renderer");
+    var appli: Appli = try .init(.{ .width = 800, .height = 800 }, "font renderer");
     defer appli.deinit();
-}
 
-fn renderActualGlyphToQoi(glyph: Font.Glyph, qoi_filepath: []const u8) !void {
-    var glyph_info = TriangulatedGlyph.GlyphInfo.init(glyph);
-    defer glyph_info.deinit();
-
-    var im: Image.GlyphDebug = .init(glyph.box, 20, 150, .{255, 255, 0}, .{0, 255, 255});
-    defer im.rgb.deinit();
-
-    var h: u16 = 0;
-    while (h < im.rgb.height) : (h += 1) {
-        var w: u16 = 0;
-        while (w < im.rgb.width) : (w += 1) {
-            const idx = h * im.rgb.width + w;
-            const y = glyph.box.y_max - @as(i16, @intCast(h)) + 1;
-            const x = glyph.box.x_min + @as(i16, @intCast(w)) - 1;
-            const winding = TriangulatedGlyph.windingInGlyph(glyph, glyph_info, .{ .x = x, .y = y });
-            im.setWindingLinear(idx, winding);
-        }
-    }
-    im.setGlyphPoints(glyph);
-
-    const qoi_file = try std.fs.cwd().createFile(qoi_filepath, .{});
-    defer qoi_file.close();
-
-    var buf: [512]u8 = undefined;
-    var qoi_writer = qoi_file.writer(&buf);
-    defer qoi_writer.interface.flush() catch {};
-
-    try qoi.saveRGB(&qoi_writer.interface, &im.rgb.interface);
+    helpers.ensureAlloc(appli.glyph_objects.append(helpers.allocator, try .init(appli.vk_ctx, triangle_glyph, 1 / @as(f32, @floatFromInt(font.information.units_per_em)))));
+    try appli.mainLoop();
 }
 

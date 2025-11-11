@@ -2,7 +2,7 @@ const std = @import("std");
 
 
 pub fn Point(comptime T: type) type {
-    return struct {
+    return extern struct {
         x: T,
         y: T,
 

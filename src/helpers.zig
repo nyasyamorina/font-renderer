@@ -140,3 +140,130 @@ pub fn readIntAlloc(ally: std.mem.Allocator, reader: *std.Io.Reader, endian: std
     return arr;
 }
 
+
+pub fn PhysicalDeviceFeatures(comptime FeatureTypes: []const type) type {
+    _ = std.debug.assert(FeatureTypes[0] == vk.PhysicalDeviceFeatures2);
+    return struct {
+        features: Features,
+
+        pub const Features = blk: {
+            var fields: [FeatureTypes.len]std.builtin.Type.StructField = undefined;
+            for (&fields, FeatureTypes) |*field, ftype| {
+                field.* = .{
+                    .type = ftype,
+                    .name = featureType2FieldName(ftype),
+                    .default_value_ptr = @ptrCast(&ftype {
+                        .sType = vkSType(ftype),
+                    }),
+                    .is_comptime = false,
+                    .alignment = @alignOf(ftype),
+                };
+            }
+            break :blk @Type( .{ .@"struct" = .{
+                .fields = &fields,
+                .decls = &.{},
+                .is_tuple = false,
+                .layout = .@"extern",
+            } });
+        };
+
+        pub const init: @This() = .{ .features = .{} };
+
+        pub fn buildChain(self: *@This()) *vk.PhysicalDeviceFeatures2 {
+            var prev_ptr: ?*anyopaque = null;
+            inline for (0 .. FeatureTypes.len) |rev_idx| {
+                const ftype = FeatureTypes[FeatureTypes.len - 1 - rev_idx];
+                const field_name = comptime featureType2FieldName(ftype);
+                //@field(self.features, field_name).sType = vkSType(ftype);
+                @field(self.features, field_name).pNext = prev_ptr;
+                prev_ptr = @ptrCast(&@field(self.features, field_name));
+            }
+            return &self.features.@"2";
+        }
+
+        pub fn check(self: @This(), target: @This()) bool {
+            const log = std.log.scoped(.CheckPhysicalDeviceFeatures);
+            var pass = true;
+            inline for (FeatureTypes) |ftype| {
+                const field_name = comptime featureType2FieldName(ftype);
+                inline for (@typeInfo(ftype).@"struct".fields) |field| {
+                    if (field.type == vk.Bool32) {
+                        if (@field(@field(target.features, field_name), field.name) == vk.@"true" and
+                            @field(@field(self.features, field_name), field.name) != vk.@"true") {
+                            log.err("device not cantain feature: \"{s}.{s}\"", .{@typeName(ftype), field.name});
+                            pass = false;
+                        }
+                    }
+                }
+            }
+            return pass;
+        }
+
+        pub fn featureType2FieldName(comptime ftype: type) [:0]const u8 {
+            return switch (ftype) {
+                vk.PhysicalDeviceFeatures2 => "2",
+                vk.PhysicalDeviceVulkan11Features => "vulkan11",
+                vk.PhysicalDeviceVulkan12Features => "vulkan12",
+                vk.PhysicalDeviceVulkan13Features => "vulkan13",
+                vk.PhysicalDeviceExtendedDynamicStateFeaturesEXT => "extended_dynamic_state",
+                else => @compileError(@typeName(ftype) ++ " not supported yet"),
+            };
+        }
+    };
+}
+
+pub fn vkSType(comptime T: type) vk.StructureType {
+    return switch (T) {
+        vk.ApplicationInfo => vk.structure_type_application_info,
+        vk.BufferCreateInfo => vk.structure_type_buffer_create_info,
+        vk.CommandBufferAllocateInfo => vk.structure_type_command_buffer_allocate_info,
+        vk.CommandBufferBeginInfo => vk.structure_type_command_buffer_begin_info,
+        vk.CommandPoolCreateInfo => vk.structure_type_command_pool_create_info,
+        vk.ComputePipelineCreateInfo => vk.structure_type_comput_pipeline_create_info,
+        vk.DebugUtilsMessengerCreateInfoEXT => vk.structure_type_debug_utils_messenger_create_info_EXT,
+        vk.DependencyInfo => vk.structure_type_dependency_info,
+        vk.DescriptorPoolCreateInfo => vk.structure_type_descriptor_pool_create_info,
+        vk.DescriptorSetAllocateInfo => vk.structure_type_descriptor_set_allocate_info,
+        vk.DescriptorSetLayoutCreateInfo => vk.structure_type_descriptor_set_layout_create_info,
+        vk.DeviceCreateInfo => vk.structure_type_device_create_info,
+        vk.DeviceQueueCreateInfo => vk.structure_type_device_queue_create_info,
+        vk.FenceCreateInfo => vk.structure_type_fence_create_info,
+        vk.FramebufferCreateInfo => vk.structure_type_framebuffer_create_info,
+        vk.GraphicsPipelineCreateInfo => vk.structure_type_graphics_pipeline_create_info,
+        vk.ImageCreateInfo => vk.structure_type_image_create_info,
+        vk.ImageMemoryBarrier => vk.structure_type_image_memory_barrier,
+        vk.ImageMemoryBarrier2 => vk.structure_type_image_memory_barrier_2,
+        vk.ImageViewCreateInfo => vk.structure_type_image_view_create_info,
+        vk.InstanceCreateInfo => vk.structure_type_instance_craete_info,
+        vk.MemoryAllocateInfo => vk.structure_type_memory_allocate_info,
+        vk.PhysicalDeviceExtendedDynamicStateFeaturesEXT => vk.structure_type_physical_device_extended_dynamic_state_features_EXT,
+        vk.PhysicalDeviceFeatures2 => vk.structure_type_physical_device_features_2,
+        vk.PhysicalDeviceVulkan11Features => vk.structure_type_physical_device_vulkan_1_1_features,
+        vk.PhysicalDeviceVulkan12Features => vk.structure_type_physical_device_vulkan_1_2_features,
+        vk.PhysicalDeviceVulkan13Features => vk.structure_type_physical_device_vulkan_1_3_features,
+        vk.PipelineColorBlendStateCreateInfo => vk.structure_type_pipeline_color_blend_state_create_info,
+        vk.PipelineDepthStencilStateCreateInfo => vk.structure_type_pipeline_depth_ctensil_state_create_info,
+        vk.PipelineDynamicStateCreateInfo => vk.structure_type_pipeline_dynamic_state_create_info,
+        vk.PipelineInputAssemblyStateCreateInfo => vk.structure_type_pipeline_input_assembly_state_create_info,
+        vk.PipelineLayoutCreateInfo => vk.structure_type_pipeline_layout_create_info,
+        vk.PipelineMultisampleStateCreateInfo => vk.structure_type_pipeline_multisample_state_create_info,
+        vk.PipelineRasterizationStateCreateInfo => vk.structure_type_pipeline_rasterization_state_create_info,
+        vk.PipelineRenderingCreateInfo => vk.structure_type_pipeline_rendering_create_info,
+        vk.PipelineShaderStageCreateInfo => vk.structure_type_pipeline_shader_stage_create_info,
+        vk.PipelineVertexInputStateCreateInfo => vk.structure_type_pipeline_vertex_input_state_create_info,
+        vk.PipelineViewportStateCreateInfo => vk.structure_type_pipeline_viewport_state_create_info,
+        vk.PresentInfoKHR => vk.structure_type_present_info_KHR,
+        vk.RenderPassBeginInfo => vk.structure_type_render_pass_begin_info,
+        vk.RenderPassCreateInfo => vk.structure_type_render_pass_create_info,
+        vk.RenderingAttachmentInfo => vk.structure_type_rendering_attachment_info,
+        vk.RenderingInfo => vk.structure_type_rendering_info,
+        vk.SamplerCreateInfo => vk.structure_type_sampler_create_info,
+        vk.SemaphoreCreateInfo => vk.structure_type_semaphore_create_info,
+        vk.ShaderModuleCreateInfo => vk.structure_type_shader_module_create_info,
+        vk.SubmitInfo => vk.structure_type_submit_info,
+        vk.SwapchainCreateInfoKHR => vk.structure_type_swapchain_create_info_KHR,
+        vk.WriteDescriptorSet => vk.structure_type_write_descriptor_set,
+        else => @compileError(@typeName(T) ++ " is not indexing structure type"),
+    };
+}
+

@@ -2,6 +2,7 @@ const std = @import("std");
 
 const helper = @import("../helpers.zig");
 const Glyph = @import("../font/Glyph.zig");
+const TriangulatedGlyph = @import("TriangulatedGlyph.zig");
 const Point = @import("geometry.zig").Point;
 const Image = @This();
 
@@ -216,6 +217,28 @@ pub const GlyphDebug = struct {
 
             }
         }
+    }
+
+    pub fn render(glyph: Glyph, winding_scale: u8) Image.GlyphDebug {
+        var glyph_info = TriangulatedGlyph.GlyphInfo.init(glyph);
+        defer glyph_info.deinit();
+
+        var im: Image.GlyphDebug = .init(glyph.box, winding_scale, 150, .{255, 255, 0}, .{0, 255, 255});
+        errdefer im.rgb.deinit();
+
+        var h: u16 = 0;
+        while (h < im.rgb.height) : (h += 1) {
+            var w: u16 = 0;
+            while (w < im.rgb.width) : (w += 1) {
+                const idx = h * im.rgb.width + w;
+                const y = glyph.box.y_max - @as(i16, @intCast(h)) + 1;
+                const x = glyph.box.x_min + @as(i16, @intCast(w)) - 1;
+                const winding = TriangulatedGlyph.windingInGlyph(glyph, glyph_info, .{ .x = x, .y = y });
+                im.setWindingLinear(idx, winding);
+            }
+        }
+        im.setGlyphPoints(glyph);
+        return im;
     }
 };
 

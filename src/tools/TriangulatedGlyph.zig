@@ -1,8 +1,132 @@
 const std = @import("std");
 
+const vk = @import("../c/vk.zig");
 const Glyph = @import("../font/Glyph.zig");
 const helpers = @import("../helpers.zig");
 const Point = @import("geometry.zig").Point;
+const TriangulatedGlyph = @This();
+
+
+vertices: []Vertex,
+concave_indices: [][3]u16,
+convex_indices: [][3]u16,
+extra_indices_count: u16,
+
+
+pub const Vertex = extern struct {
+    position: Point(f32) align(4),
+    tex_coord: packed struct(u8) { x: u1, y: u1, _pad: u6 = 0 } align(1),
+
+    const _ = std.debug.assert(@alignOf(Vertex) == 1);
+
+    pub const binding_description: vk.VertexInputBindingDescription = .{
+        .binding = 0,
+        .stride = @sizeOf(Vertex),
+        .inputRate = vk.vertex_input_rate_vertex,
+    };
+    pub const attribute_descriptions: [2]vk.VertexInputAttributeDescription = .{
+        .{
+            .binding = 0,
+            .location = 0,
+            .format = vk.format_r32g32_sfloat,
+            .offset = @offsetOf(Vertex, "position"),
+        },
+        .{
+            .binding = 0,
+            .location = 1,
+            .format = vk.format_r8_uint,
+            .offset = @offsetOf(Vertex, "tex_coord"),
+        },
+    };
+};
+
+pub fn init(glyph: Glyph) TriangulatedGlyph {
+    //var glyph_info: GlyphInfo = .init(glyph);
+    //defer glyph_info.deinit();
+
+    var vertex_count: usize = 0;
+    var curve_count: usize = 0;
+    for (glyph.contours) |contour| {
+        vertex_count += contour.points.len;
+        curve_count += contour.points.len / 2;
+    }
+    const vertices = helpers.ensureAlloc(helpers.allocator.alloc(Vertex, vertex_count));
+    errdefer helpers.allocator.free(vertices);
+    const indices = helpers.ensureAlloc(helpers.allocator.alloc([3]u16, curve_count));
+    errdefer helpers.allocator.free(indices);
+
+    var vertex_idx: u16 = 0;
+    var concave_indices_end: u16 = 0;
+    var indices_end: u16 = 0;
+    for (glyph.contours) |contour| {
+        vertices[vertex_idx] = .{
+            .position = contour.points[0].to(f32),
+            .tex_coord = .{ .x = 1, .y = 0 },
+        };
+        vertex_idx += 1;
+
+        const count = contour.points.len / 2;
+        for (0..count) |curve_idx| {
+            const odd_curve = curve_idx & 1 != 0;
+            const p0_idx: u16 = @intCast(2 * curve_idx);
+            vertices[vertex_idx] = .{
+                .position = contour.points[p0_idx + 1].to(f32),
+                .tex_coord = .{ .x = 0, .y = 0 },
+            };
+            vertices[vertex_idx + 1] = .{
+                .position = contour.points[p0_idx + 2].to(f32),
+                .tex_coord = .{ .x = @intFromBool(odd_curve), .y = @intFromBool(!odd_curve) },
+            };
+
+            const p0 = contour.points[p0_idx].to(i32);
+            const p1 = contour.points[p0_idx + 1].to(i32);
+            const p2 = contour.points[p0_idx + 2].to(i32);
+            switch (std.math.order((p1.x - p0.x) * (p2.y - p0.y), (p1.y - p0.y) * (p2.x - p0.x))) {
+                .lt => { // clockwise, normally means this curve is convex
+                    indices[indices_end] = .{vertex_idx - 1, vertex_idx + 1, vertex_idx};
+                    indices_end += 1;
+                },
+                .eq => {}, // stright line
+                .gt => { // conter-clockwise, normally means this curve is concave
+                    if (concave_indices_end != indices_end) indices[indices_end] = indices[concave_indices_end];
+                    indices_end += 1;
+                    indices[concave_indices_end] = .{vertex_idx - 1, vertex_idx, vertex_idx + 1};
+                    concave_indices_end += 1;
+                },
+            }
+            vertex_idx += 2;
+            //const is_clockwise = (p1.x - p0.x) * (p2.y - p0.y) > (p1.y - p0.y) * (p2.x - p0.x);
+            //const triangle: [3]u16 = if (is_clockwise) .{vertex_idx - 1, vertex_idx, vertex_idx + 1} else .{vertex_idx - 1, vertex_idx + 1, vertex_idx};
+
+            //const is_concave = windingInGlyph(glyph, glyph_info, contour.points[p0_idx + 1]) != 0;
+            //if (is_concave) {
+            //    if (concave_indices_end != indices_end) indices[indices_end] = indices[concave_indices_end];
+            //    indices[concave_indices_end] = triangle;
+            //    concave_indices_end += 1;
+            //} else {
+            //    indices[indices_end] = triangle;
+            //}
+
+            //vertex_idx += 2;
+            //indices_end += 1;
+        }
+    }
+
+    return .{
+        .vertices = vertices,
+        .concave_indices = indices[0 .. concave_indices_end],
+        .convex_indices = indices[concave_indices_end .. indices_end],
+        .extra_indices_count = @intCast(indices.len - indices_end),
+    };
+}
+
+pub fn deinit(self: *TriangulatedGlyph) void {
+    helpers.allocator.free(self.vertices);
+    self.vertices = undefined;
+    helpers.allocator.free(self.concave_indices.ptr[0 .. (self.concave_indices.len + self.convex_indices.len + self.extra_indices_count)]);
+    self.concave_indices = undefined;
+    self.convex_indices = undefined;
+}
 
 
 pub const GlyphInfo = struct {
@@ -86,7 +210,9 @@ pub const GlyphInfo = struct {
     }
 };
 
-
+/// ! still has some problem !
+///
+/// TODO: fix it!
 pub fn windingInGlyph(glyph: Glyph, glyph_info: GlyphInfo, point: Point(i16)) i16 {
     const p = point.to(i32);
     // counting the winding number using a ray that starts at `point` and points to positive x-axis
