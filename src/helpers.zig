@@ -45,6 +45,9 @@ pub fn ensureAlloc(allocate_result: anytype) @typeInfo(@TypeOf(allocate_result))
         inline else => @compileError("this method can only call after memory allocations"),
     }
 }
+pub fn alloc(comptime T: type, count: usize) []T {
+    return ensureAlloc(allocator.alloc(T, count));
+}
 
 /// ensure array elements are monotonically increasing
 pub fn ensureMonoIncrease(comptime T: type, arr: []const T) void {
@@ -186,10 +189,14 @@ pub fn PhysicalDeviceFeatures(comptime FeatureTypes: []const type) type {
             var pass = true;
             inline for (FeatureTypes) |ftype| {
                 const field_name = comptime featureType2FieldName(ftype);
-                inline for (@typeInfo(ftype).@"struct".fields) |field| {
+                const ftype2 = if (ftype == vk.PhysicalDeviceFeatures2) vk.PhysicalDeviceFeatures else ftype;
+                const self_f = if (ftype == vk.PhysicalDeviceFeatures2) @field(self.features, field_name).features else @field(self.features, field_name);
+                const target_f = if (ftype == vk.PhysicalDeviceFeatures2) @field(target.features, field_name).features else @field(target.features, field_name);
+
+                inline for (@typeInfo(ftype2).@"struct".fields) |field| {
                     if (field.type == vk.Bool32) {
-                        if (@field(@field(target.features, field_name), field.name) == vk.@"true" and
-                            @field(@field(self.features, field_name), field.name) != vk.@"true") {
+                        if (@field(target_f, field.name) == vk.@"true" and
+                            @field(self_f, field.name) != vk.@"true") {
                             log.err("device not cantain feature: \"{s}.{s}\"", .{@typeName(ftype), field.name});
                             pass = false;
                         }
@@ -206,6 +213,7 @@ pub fn PhysicalDeviceFeatures(comptime FeatureTypes: []const type) type {
                 vk.PhysicalDeviceVulkan12Features => "vulkan12",
                 vk.PhysicalDeviceVulkan13Features => "vulkan13",
                 vk.PhysicalDeviceExtendedDynamicStateFeaturesEXT => "extended_dynamic_state",
+                vk.PhysicalDevice16BitStorageFeatures => "storage_16bit",
                 else => @compileError(@typeName(ftype) ++ " not supported yet"),
             };
         }
@@ -236,6 +244,7 @@ pub fn vkSType(comptime T: type) vk.StructureType {
         vk.ImageViewCreateInfo => vk.structure_type_image_view_create_info,
         vk.InstanceCreateInfo => vk.structure_type_instance_craete_info,
         vk.MemoryAllocateInfo => vk.structure_type_memory_allocate_info,
+        vk.PhysicalDevice16BitStorageFeatures => vk.structure_type_physical_device_16bit_storage_features,
         vk.PhysicalDeviceExtendedDynamicStateFeaturesEXT => vk.structure_type_physical_device_extended_dynamic_state_features_EXT,
         vk.PhysicalDeviceFeatures2 => vk.structure_type_physical_device_features_2,
         vk.PhysicalDeviceVulkan11Features => vk.structure_type_physical_device_vulkan_1_1_features,

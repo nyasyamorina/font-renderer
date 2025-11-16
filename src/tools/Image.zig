@@ -1,12 +1,12 @@
 const std = @import("std");
 
-const helper = @import("../helpers.zig");
+const helpers = @import("../helpers.zig");
 const Glyph = @import("../font/Glyph.zig");
-const TriangulatedGlyph = @import("TriangulatedGlyph.zig");
+const render_glyph = @import("render_glyph.zig");
 const Point = @import("geometry.zig").Point;
 const Image = @This();
 
-const ensureAlloc = helper.ensureAlloc;
+const ensureAlloc = helpers.ensureAlloc;
 
 
 vtable: *const VTable,
@@ -58,12 +58,12 @@ pub const Gray = struct {
     }
 
     pub fn init(width: u32, height: u32) Image.Gray {
-        const data = ensureAlloc(helper.allocator.alloc(u8, @as(usize, width) * height));
+        const data = helpers.alloc(u8, @as(usize, width) * height);
         return .{ .width = width, .height = height, .data = data, .interface = initInterface() };
     }
 
     pub fn deinit(self: *Image.Gray) void {
-        helper.allocator.free(self.data);
+        helpers.allocator.free(self.data);
         self.data = undefined;
     }
 
@@ -101,12 +101,12 @@ pub const Winding = struct {
     }
 
     pub fn init(width: u32, height: u32, scaler: u8, overflow_color: u8) Image.Winding {
-        const data = ensureAlloc(helper.allocator.alloc(i16, @as(usize, width) * height));
+        const data = helpers.alloc(i16, @as(usize, width) * height);
         return .{ .width = width, .height = height, .data = data, .scaler = scaler, .overflow_color = overflow_color, .interface = initInterface() };
     }
 
     pub fn deinit(self: *Image.Winding) void {
-        helper.allocator.free(self.data);
+        helpers.allocator.free(self.data);
         self.data = undefined;
     }
 
@@ -146,12 +146,12 @@ pub const RGB = struct {
     }
 
     pub fn init(width: u32, height: u32) Image.RGB {
-        const data = ensureAlloc(helper.allocator.alloc([3]u8, @as(usize, width) * height));
+        const data = helpers.alloc([3]u8, @as(usize, width) * height);
         return .{ .width = width, .height = height, .data = data, .interface = initInterface() };
     }
 
     pub fn deinit(self: *Image.RGB) void {
-        helper.allocator.free(self.data);
+        helpers.allocator.free(self.data);
         self.data = undefined;
     }
 
@@ -220,7 +220,7 @@ pub const GlyphDebug = struct {
     }
 
     pub fn render(glyph: Glyph, winding_scale: u8) Image.GlyphDebug {
-        var glyph_info = TriangulatedGlyph.GlyphInfo.init(glyph);
+        var glyph_info = render_glyph.GlyphInfo.init(glyph);
         defer glyph_info.deinit();
 
         var im: Image.GlyphDebug = .init(glyph.box, winding_scale, 150, .{255, 255, 0}, .{0, 255, 255});
@@ -233,7 +233,7 @@ pub const GlyphDebug = struct {
                 const idx = h * im.rgb.width + w;
                 const y = glyph.box.y_max - @as(i16, @intCast(h)) + 1;
                 const x = glyph.box.x_min + @as(i16, @intCast(w)) - 1;
-                const winding = TriangulatedGlyph.windingInGlyph(glyph, glyph_info, .{ .x = x, .y = y });
+                const winding = render_glyph.windingInGlyph(glyph, glyph_info, .{ .x = x, .y = y });
                 im.setWindingLinear(idx, winding);
             }
         }

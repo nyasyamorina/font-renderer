@@ -256,7 +256,7 @@ fn createInstanceAndDebugMessenger(self: *VulkanContext, appli_name: [*:0]const 
     if (extension_names.items.len > 0) {
         count = 0;
         try ensureVkSuccess("vkEnumerateInstanceExtensionProperties", vk.enumerateInstanceExtensionProperties(null, &count, null));
-        const extensions_properties = ensureAlloc(helpers.allocator.alloc(vk.ExtensionProperties, count));
+        const extensions_properties = helpers.alloc(vk.ExtensionProperties, count);
         defer helpers.allocator.free(extensions_properties);
         try ensureVkSuccess("vkEnumerateInstanceExtensionProperties", vk.enumerateInstanceExtensionProperties(null, &count, extensions_properties.ptr));
 
@@ -275,7 +275,7 @@ fn createInstanceAndDebugMessenger(self: *VulkanContext, appli_name: [*:0]const 
     if (layer_names.items.len > 0) {
         count = 0;
         try ensureVkSuccess("vkEnumerateInstanceLayerProperties", vk.enumerateInstanceLayerProperties(&count, null));
-        const layers_properties = ensureAlloc(helpers.allocator.alloc(vk.LayerProperties, count));
+        const layers_properties = helpers.alloc(vk.LayerProperties, count);
         defer helpers.allocator.free(layers_properties);
         try ensureVkSuccess("vkEnumerateInstanceLayerProperties", vk.enumerateInstanceLayerProperties(&count, layers_properties.ptr));
 
@@ -385,6 +385,7 @@ pub const device_extensions = [_][*:0]const u8 {
 
 pub const device_features = blk: {
     var tmp: helpers.PhysicalDeviceFeatures(&.{vk.PhysicalDeviceFeatures2, vk.PhysicalDeviceVulkan12Features, vk.PhysicalDeviceVulkan13Features}) = .init;
+    tmp.features.@"2".features.shaderInt16 = vk.@"true";
     tmp.features.vulkan12.shaderInt8 = vk.@"true";
     tmp.features.vulkan13.dynamicRendering = vk.@"true";
     tmp.features.vulkan13.synchronization2 = vk.@"true";
@@ -411,7 +412,7 @@ fn pickAndCreateDevice(self: *VulkanContext) !void {
         },
         else => {
             log.info("{d} devices detected", .{count});
-            const devices = ensureAlloc(helpers.allocator.alloc(vk.PhysicalDevice, count));
+            const devices = helpers.alloc(vk.PhysicalDevice, count);
             defer helpers.allocator.free(devices);
             try ensureVkSuccess("vkEnumeratePhysicalDevices", vk.enumeratePhysicalDevices(self.instance, &count, devices.ptr));
 
@@ -434,7 +435,7 @@ fn pickAndCreateDevice(self: *VulkanContext) !void {
     // get memory types;
     var mem_prop: vk.PhysicalDeviceMemoryProperties = .{};
     vk.getPhysicalDeviceMemoryProperties(self.physical_device, &mem_prop);
-    self.device_memory_types = ensureAlloc(helpers.allocator.alloc(vk.MemoryType, mem_prop.memoryTypeCount));
+    self.device_memory_types = helpers.alloc(vk.MemoryType, mem_prop.memoryTypeCount);
     errdefer helpers.allocator.free(self.device_memory_types);
     @memcpy(self.device_memory_types, mem_prop.memoryTypes[0 .. mem_prop.memoryTypeCount]);
 
@@ -498,7 +499,7 @@ fn checkPhysicalDeviceSuitabilities(self: *VulkanContext, device: vk.PhysicalDev
     // check device extensions
     var count: u32 = 0;
     ensureVkSuccess("vkEnumerateDeviceExtensionProperties", vk.enumerateDeviceExtensionProperties(device, null, &count, null)) catch return false;
-    const extensions_properties = ensureAlloc(helpers.allocator.alloc(vk.ExtensionProperties, count));
+    const extensions_properties = helpers.alloc(vk.ExtensionProperties, count);
     defer helpers.allocator.free(extensions_properties);
     ensureVkSuccess("vkEnumerateDeviceExtensionProperties", vk.enumerateDeviceExtensionProperties(device, null, &count, extensions_properties.ptr)) catch return false;
 
@@ -534,7 +535,7 @@ pub const QueueFamilies = struct {
 
         var count: u32 = 0;
         vk.getPhysicalDeviceQueueFamilyProperties(device, &count, null);
-        const queue_families_properties = ensureAlloc(helpers.allocator.alloc(vk.QueueFamilyProperties, count));
+        const queue_families_properties = helpers.alloc(vk.QueueFamilyProperties, count);
         defer helpers.allocator.free(queue_families_properties);
         vk.getPhysicalDeviceQueueFamilyProperties(device, &count, queue_families_properties.ptr);
 
@@ -620,7 +621,7 @@ pub const SurfaceInfo = struct {
             log.err("device does not support any surface formats", .{});
             return error.@"surface format not found";
         }
-        const formats = ensureAlloc(helpers.allocator.alloc(vk.SurfaceFormatKHR, count));
+        const formats = helpers.alloc(vk.SurfaceFormatKHR, count);
         defer helpers.allocator.free(formats);
         try ensureVkSuccess("vkGetPhysicalDeviceSurfaceFormatsKHR", vk.getPhysicalDeviceSurfaceFormatsKHR(device, surface, &count, formats.ptr));
 
@@ -637,7 +638,7 @@ pub const SurfaceInfo = struct {
             log.err("device does not support any present modes", .{});
             return error.@"present mode not found";
         }
-        const modes = ensureAlloc(helpers.allocator.alloc(vk.PresentModeKHR, count));
+        const modes = helpers.alloc(vk.PresentModeKHR, count);
         defer helpers.allocator.free(modes);
         try ensureVkSuccess("vkGetPhysicalDeviceSurfacePresentModesKHR", vk.getPhysicalDeviceSurfacePresentModesKHR(device, surface, &count, modes.ptr));
 
@@ -945,7 +946,7 @@ pub fn createBuffers(self: VulkanContext, sizes: []const vk.DeviceSize, usages: 
             .sType = vk.structure_type_buffer_create_info,
             .sharingMode = vk.sharing_mode_exclusive,
             .usage = usage,
-            .size = size,
+            .size = @max(1, size),
         }, null, buf));
         offset.* = total_size;
         vk.getBufferMemoryRequirements(self.device, buf.*, &mem_req);
@@ -971,6 +972,7 @@ pub fn copyBuffers(self: VulkanContext, src: []const vk.Buffer, dst: []const vk.
     defer vk.freeCommandBuffers(self.device, self.command_pools.graphics, 1, &command_buffer);
 
     for (src, dst, sizes) |s, d, size| {
+        if (size == 0) continue;
         vk.cmdCopyBuffer(command_buffer, s, d, 1, &.{ .size = size });
     }
 

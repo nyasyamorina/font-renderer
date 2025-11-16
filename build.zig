@@ -29,7 +29,7 @@ pub fn build(b: *std.Build) !void {
     exe.root_module.linkSystemLibrary("glfw3", .{});
     if (is_windows) b.installBinFile("third-party/glfw-3.4/lib/glfw3.dll", "bin/glfw3.dll");
 
-    try compileSlangShader(b, exe, "shader.slang", &.{"vertMain", "concaveMain", "convexMain"});
+    try compileSlangShader(b, exe, "shader.slang", &.{"vertMain", "curveMain", "solidMain"});
 
     b.installArtifact(exe);
 

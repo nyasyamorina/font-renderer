@@ -32,7 +32,6 @@ pub fn main() !void {
     defer font.deinit();
 
     const glyph = try font.getGlyph('δ');
-    std.debug.print("glyph box: {any}\n", .{glyph.box});
     var triangle_glyph: TriangulatedGlyph = .init(glyph);
     defer triangle_glyph.deinit();
 
@@ -49,7 +48,7 @@ pub fn main() !void {
     var appli: Appli = try .init(.{ .width = 800, .height = 800 }, "font renderer");
     defer appli.deinit();
 
-    helpers.ensureAlloc(appli.glyph_objects.append(helpers.allocator, try .init(appli.vk_ctx, triangle_glyph, 1 / @as(f32, @floatFromInt(font.information.units_per_em)))));
+    helpers.ensureAlloc(appli.glyph_objects.append(helpers.allocator, try .init(appli.vk_ctx, triangle_glyph)));
     try appli.mainLoop();
 }
 
