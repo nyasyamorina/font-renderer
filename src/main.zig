@@ -47,7 +47,7 @@ pub fn main() !void {
     //try qoi.saveRGB(&qoi_writer.interface, &glyph_debug.rgb.interface);
 
     var callback_ctx: CallbackContext = .{};
-    var appli: Appli = try .init(&font, &callback_ctx, .{ .width = 800, .height = 800 }, "font renderer");
+    var appli: Appli = try .init(&font, &callback_ctx, .{ .width = 800, .height = 600 }, "font renderer");
     defer appli.deinit();
 
     try appli.setChar('δ');

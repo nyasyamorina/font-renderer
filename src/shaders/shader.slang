@@ -9,8 +9,8 @@ struct VertOut {
 };
 
 struct Transform {
+    float2 scale;
     float2 offset;
-    float scale;
 };
 [push_constant]
 ConstantBuffer<Transform> transform;

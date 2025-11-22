@@ -20,20 +20,69 @@ vk_ctx: VulkanContext,
 general_pipeline_layout: vk.PipelineLayout,
 curve_pipeline: vk.Pipeline,
 solid_pipeline: vk.Pipeline,
-global_transform: Transform,
+view_transform: ViewTransform,
 transform_changed: bool = false,
 glyph_objects: std.AutoArrayHashMapUnmanaged(u32, GlyphMapValue) = .empty,
 total_transforms: std.ArrayList(Transform) = .empty,
 frame_count: usize = 0,
-cursor_pos: Point(f32) = undefined,
+cursor_pos: Point(f32) = .{ .x = 0, .y = 0 },
 cursor_pos_last_update_frame: usize = 0,
 prev_cursor_pos: ?Point(f32) = null,
 
 
 const Transform = extern struct {
+    scale: [2]f32 align(8) = .{1, 1},
     offset: [2]f32 align(8) = .{0, 0},
-    scale: f32 = 1,
+
+    fn init(scale: f32, offset: [2]f32) Transform {
+        return .{ .scale = .{scale, scale}, .offset = offset };
+    }
 };
+const ViewTransform = struct {
+    global: Transform,
+    aspect_ratio: f32,
+
+    fn init(font_unit_per_em: u16, surface_extent: vk.Extent2D) ViewTransform {
+        const scale = 1 / @as(f32, @floatFromInt(font_unit_per_em));
+        const width: f32 = @floatFromInt(surface_extent.width);
+        const height: f32 = @floatFromInt(surface_extent.height);
+        return .{
+            .global = .{
+                .scale = .{scale, scale},
+                .offset = .{0, 0},
+            },
+            .aspect_ratio = width / height,
+        };
+    }
+
+    fn combineWith(self: ViewTransform, local: Transform) Transform {
+        return .{
+            .scale = .{
+                (local.scale[0] * self.global.scale[0]),
+                (local.scale[1] * self.global.scale[1]) * self.aspect_ratio,
+            },
+            .offset = .{
+                (local.offset[0] * self.global.scale[0] + self.global.offset[0]),
+                (local.offset[1] * self.global.scale[1] + self.global.offset[1]) * self.aspect_ratio,
+            },
+        };
+    }
+
+    fn applyTo(self: ViewTransform, p: Point(f32)) Point(f32) {
+        return .{
+            .x = (p.x * self.global.scale[0] + self.global.offset[0]),
+            .y = (p.y * self.global.scale[1] + self.global.offset[1]) * self.aspect_ratio,
+        };
+    }
+
+    fn undoFrom(self: ViewTransform, p: Point(f32)) Point(f32) {
+        return .{
+            .x = (p.x                     - self.global.offset[0]) / self.global.scale[0],
+            .y = (p.y / self.aspect_ratio - self.global.offset[1]) / self.global.scale[1],
+        };
+    }
+};
+
 const GlyphMapValue = struct {
     glyph_object: GlyphObject,
     box: Font.Glyph.Box,
@@ -61,10 +110,7 @@ pub fn init(font: *Font, cb_ctx: *CallbackContext, window_size: vk.Extent2D, win
         .general_pipeline_layout = pipeline_layout,
         .curve_pipeline = curve_pipeline,
         .solid_pipeline = solid_pipeline,
-        .global_transform = .{
-            .scale = 2 / @as(f32, @floatFromInt(font.information.units_per_em)),
-            .offset = .{-1, -1},
-        },
+        .view_transform = .init(font.information.units_per_em, vk_ctx.surface_info.extent),
     };
 }
 
@@ -93,6 +139,7 @@ pub fn renderingFunc(data: ?*anyopaque, command_buffer: vk.CommandBuffer) !void 
     const self: *Appli = @ptrCast(@alignCast(data.?));
     self.frame_count +%= 1;
 
+    self.applyAspectRatio();
     self.zoom();
     self.drag();
     if (self.transform_changed) {
@@ -102,6 +149,7 @@ pub fn renderingFunc(data: ?*anyopaque, command_buffer: vk.CommandBuffer) !void 
 
     var index: usize = 0;
     vk.cmdBindPipeline(command_buffer, vk.pipeline_bind_point_graphics, self.curve_pipeline);
+    self.vk_ctx.setGraphicsPipelineDynamicStuff(command_buffer);
     for (self.glyph_objects.values()) |v| {
         if (v.glyph_object.curve_count == 0) continue;
         vk.cmdBindVertexBuffers(command_buffer, 0, 1, &v.glyph_object.vertex_buffer, &@as(u64, 0));
@@ -117,6 +165,7 @@ pub fn renderingFunc(data: ?*anyopaque, command_buffer: vk.CommandBuffer) !void 
 
     index = 0;
     vk.cmdBindPipeline(command_buffer, vk.pipeline_bind_point_graphics, self.solid_pipeline);
+    self.vk_ctx.setGraphicsPipelineDynamicStuff(command_buffer);
     for (self.glyph_objects.values()) |v| {
         if (v.glyph_object.solid_count == 0) continue;
         vk.cmdBindVertexBuffers(command_buffer, 0, 1, &v.glyph_object.vertex_buffer, &@as(u64, 0));
@@ -242,22 +291,19 @@ fn updateTotalTransforms(self: *Appli) void {
     var index: usize = 0;
     for (self.glyph_objects.values()) |v| {
         for (v.transforms.items) |local| {
-            self.total_transforms.items[index] = combineTransfrom(local, self.global_transform);
+            self.total_transforms.items[index] = self.view_transform.combineWith(local);
             index += 1;
         }
     }
 }
 
-fn combineTransfrom(local: Transform, global: Transform) Transform {
-    return .{
-        .scale = local.scale * global.scale,
-        .offset = .{
-            local.offset[0] * global.scale + global.offset[0],
-            local.offset[1] * global.scale + global.offset[1],
-        },
-    };
-}
 
+fn applyAspectRatio(self: *Appli) void {
+    if (!self.vk_ctx.recreated_swapchain) return;
+    self.view_transform.aspect_ratio = @as(f32, @floatFromInt(self.vk_ctx.surface_info.extent.width)) / @as(f32, @floatFromInt(self.vk_ctx.surface_info.extent.height));
+    self.transform_changed = true;
+    self.vk_ctx.recreated_swapchain = false;
+}
 
 fn cursorPosition(self: *Appli) Point(f32) {
     if (self.frame_count != self.cursor_pos_last_update_frame) self.cursor_pos = self.vk_ctx.getCursor();
@@ -270,11 +316,13 @@ fn zoom(self: *Appli) void {
     const scroll = self.cb_ctx.scroll_accumulate;
     self.cb_ctx.scroll_accumulate = 0;
 
-    const z = std.math.pow(f32, zoom_factor, @as(f32, @floatCast(scroll)));
+    const scale = std.math.pow(f32, zoom_factor, @as(f32, @floatCast(scroll)));
     const cursor = self.vk_ctx.getCursor();
-    self.global_transform.scale *= z;
-    self.global_transform.offset[0] += (1 - z) * (cursor.x - self.global_transform.offset[0]);
-    self.global_transform.offset[1] += (1 - z) * (cursor.y - self.global_transform.offset[1]);
+    const zoom_center = self.view_transform.undoFrom(cursor);
+
+    self.view_transform.global.offset[0] += self.view_transform.global.scale[0] * (1 - scale) * zoom_center.x;
+    self.view_transform.global.offset[1] += self.view_transform.global.scale[1] * (1 - scale) * zoom_center.y;
+    self.view_transform.global.scale[0] *= scale; self.view_transform.global.scale[1] *= scale;
     self.transform_changed = true;
 }
 
@@ -287,9 +335,9 @@ fn drag(self: *Appli) void {
     const curr_pos = self.cursorPosition();
     if (self.prev_cursor_pos) |prev_pos| {
         const diff = curr_pos.sub(prev_pos);
-        if (diff.x != 0 and diff.y != 0) {
-            self.global_transform.offset[0] += diff.x;
-            self.global_transform.offset[1] += diff.y;
+        if (diff.x != 0 or diff.y != 0) { // ? values near to 0 also cause this cond to be false ?
+            self.view_transform.global.offset[0] += diff.x;
+            self.view_transform.global.offset[1] += diff.y / self.view_transform.aspect_ratio;
             self.transform_changed = true;
         }
     }

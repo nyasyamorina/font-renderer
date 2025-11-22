@@ -193,7 +193,7 @@ pub fn dumpTTFCmapSubtables(allocator: std.mem.Allocator, file: *std.fs.File.Rea
 
         for (subtable_offsets.items) |offset| {
             if (offset == sub.offset) {
-    std.debug.print("    <duplicated>\n", .{});
+                std.debug.print("    <duplicated>\n", .{});
                 continue :outer;
             }
         }
@@ -231,4 +231,3 @@ pub fn dumpTTFCmapSubtables(allocator: std.mem.Allocator, file: *std.fs.File.Rea
     }
 
 }
-

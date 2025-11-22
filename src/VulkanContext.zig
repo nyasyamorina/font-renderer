@@ -12,11 +12,11 @@ const Vertex = @import("tools/TriangulatedGlyph.zig").Vertex;
 const log = std.log.scoped(.VulkanContext);
 const ensureAlloc = helpers.ensureAlloc;
 const ensureVkSuccess = helpers.ensureVkSuccess;
-const enable_validation = builtin.mode == .Debug;
 
 
 cb_ctx: *CallbackContext,
 window: ?*glfw.Window = null,
+cursor: ?*glfw.Cursor = null,
 instance: vk.Instance = null,
 debug_messenger: vk.DebugUtilsMessengerEXT = null,
 surface: vk.SurfaceKHR = null,
@@ -34,6 +34,7 @@ swapchain_operations: SwapchainOperations = undefined,
 command_buffers: [max_frames_in_flight]vk.CommandBuffer = undefined,
 in_flight_fences: [max_frames_in_flight]vk.Fence = undefined,
 in_flight_frame: u32 = 0,
+recreated_swapchain: bool = false,
 
 
 pub const max_frames_in_flight = 2;
@@ -70,6 +71,7 @@ pub fn deinit(self: *VulkanContext) void {
     self.destroyDeviceAndInfo();
     vk.destroySurfaceKHR(self.instance, self.surface, null);
     self.destroyInstanceAndDebugMessenger();
+    glfw.destroyCursor(self.cursor);
     glfw.destroyWindow(self.window);
 }
 
@@ -77,13 +79,12 @@ pub fn startMainLoop(self: *VulkanContext, comptime renderFn: fn (data: ?*anyopa
     defer _ = vk.deviceWaitIdle(self.device);
     while (glfw.windowShouldClose(self.window) == vk.@"false") : (self.in_flight_frame = (self.in_flight_frame + 1) % max_frames_in_flight) {
         if (self.surface_info.extent.width == 0 or self.surface_info.extent.height == 0) {
-            std.debug.print("minimized\n", .{});
             var w: c_int = 0; var h: c_int = 0;
-            while (w == 0 or h == 0) glfw.getFramebufferSize(self.window, &w, &h);
-
-            std.debug.print("un-minimized\n", .{});
-            self.destroySwapchainStuff(false);
-            try self.createSwapchainStuff(.{ .old_swapchain = self.swapchain, .update_extent = true });
+            while (w == 0 or h == 0) {
+                glfw.getFramebufferSize(self.window, &w, &h);
+                glfw.waitEvents();
+            }
+            try self.recreateSwapchainStuff(.{ .update_extent = true });
             continue;
         }
 
@@ -94,12 +95,10 @@ pub fn startMainLoop(self: *VulkanContext, comptime renderFn: fn (data: ?*anyopa
         try ensureVkSuccess("vkWaitForFences", vk.waitForFences(self.device, 1, &current_fence, vk.@"true", std.math.maxInt(u64)));
 
         const acquire_result = self.swapchain_operations.acquireNextImage(self.device, self.swapchain, null, null);
-        if (acquire_result.result != 0) std.debug.print("acquire result: {d}\n", .{acquire_result.result});
         switch (acquire_result.result) {
             vk.success, vk.suboptimal_KHR => {},
             vk.error_out_of_date_KHR => {
-                self.destroySwapchainStuff(false);
-                try self.createSwapchainStuff(.{ .old_swapchain = self.swapchain, .update_extent = true });
+                try self.recreateSwapchainStuff(.{ .update_extent = true });
                 continue;
             },
             else => {
@@ -131,9 +130,7 @@ pub fn startMainLoop(self: *VulkanContext, comptime renderFn: fn (data: ?*anyopa
         sw: switch (present_result) {
             vk.success => if (self.cb_ctx.resized) continue :sw vk.suboptimal_KHR,
             vk.suboptimal_KHR, vk.error_out_of_date_KHR => {
-                self.destroySwapchainStuff(false);
-                try self.createSwapchainStuff(.{ .old_swapchain = self.swapchain, .update_extent = true });
-                self.cb_ctx.resized = false;
+                try self.recreateSwapchainStuff(.{ .update_extent = true });
                 continue;
             },
             else => {
@@ -224,6 +221,18 @@ fn endRendering(self: VulkanContext, command_buffer: vk.CommandBuffer, swapchain
     try ensureVkSuccess("vkEndCommandBuffer", vk.endCommandBuffer(command_buffer));
 }
 
+pub fn setGraphicsPipelineDynamicStuff(self: VulkanContext, command_buffer: vk.CommandBuffer) void {
+    vk.cmdSetViewport(command_buffer, 0, 1, &.{
+        .x = 0, .y = 0,
+        .width = @floatFromInt(self.surface_info.extent.width), .height = @floatFromInt(self.surface_info.extent.height),
+        .minDepth = 0, .maxDepth = 1,
+    });
+    vk.cmdSetScissor(command_buffer, 0, 1, &.{
+        .extent = self.surface_info.extent,
+        .offset = .{ .x = 0, .y = 0 },
+    });
+}
+
 
 fn createWindow(self: *VulkanContext, window_size: vk.Extent2D, window_title: [*:0]const u8) !void {
     glfw.windowHint(glfw.client_api, glfw.no_api);
@@ -232,6 +241,11 @@ fn createWindow(self: *VulkanContext, window_size: vk.Extent2D, window_title: [*
 
     self.window = glfw.createWindow(@intCast(window_size.width), @intCast(window_size.height), window_title, null, null);
     if (self.window == null) return error.FailedToCreateWindow;
+
+    glfw.setInputMode(self.window, glfw.cursor, glfw.cursor_normal);
+    self.cursor = glfw.createStandardCursor(glfw.arrow_cursor);
+    if (self.cursor == null) log.warn("failed to create standard cursor", .{});
+    glfw.setCursor(self.window, self.cursor);
 
     glfw.setWindowUserPointer(self.window, @ptrCast(self.cb_ctx));
     _ = glfw.setFramebufferSizeCallback(self.window, &CallbackContext.resizeCallback);
@@ -673,7 +687,6 @@ pub const SurfaceInfo = struct {
 };
 
 const CreateSwapchainStuffOptions = packed struct {
-    old_swapchain: vk.SwapchainKHR = null,
     update_extent: bool = false,
 };
 
@@ -682,7 +695,8 @@ pub const CreateSwapchainStuffError = error {
 };
 
 fn createSwapchainStuff(self: *VulkanContext, opts: CreateSwapchainStuffOptions) CreateSwapchainStuffError!void {
-    defer if (opts.old_swapchain) |sc| vk.destroySwapchainKHR(self.device, sc, null);
+    const old_swapchain = self.swapchain;
+    defer if (old_swapchain) |old| vk.destroySwapchainKHR(self.device, old, null);
     if (opts.update_extent) {
         self.surface_info.extent, _, _ = try SurfaceInfo.chooseCapabilityStuff(self.physical_device, self.surface, self.window);
     }
@@ -706,10 +720,11 @@ fn createSwapchainStuff(self: *VulkanContext, opts: CreateSwapchainStuffOptions)
         .queueFamilyIndexCount = @intCast(unique_queue_families.count()),
         .pQueueFamilyIndices = unique_queue_families.keys().ptr,
         .compositeAlpha = vk.composite_alpha_pre_multiplied_bit_KHR,
-        .oldSwapchain = opts.old_swapchain,
+        .oldSwapchain = old_swapchain,
     };
     try ensureVkSuccess("vkCreateSwapchainKHR", vk.createSwapchainKHR(self.device, &swapchain_info, null, &self.swapchain));
     errdefer vk.destroySwapchainKHR(self.device, self.swapchain, null);
+    self.recreated_swapchain = old_swapchain != null;
 
     // swapchain images
     var count: u32 = 0;
@@ -735,6 +750,13 @@ fn destroySwapchainStuff(self: *VulkanContext, cleanup: bool) void {
         self.swapchain_images.clearRetainingCapacity();
         self.swapchain_image_views.clearRetainingCapacity();
     }
+}
+
+fn recreateSwapchainStuff(self: *VulkanContext, opts: CreateSwapchainStuffOptions) !void {
+    _ = vk.deviceWaitIdle(self.device);
+    self.destroySwapchainStuff(false);
+    try self.createSwapchainStuff(opts);
+    self.cb_ctx.resized = false;
 }
 
 pub fn createImageView(self: VulkanContext, image: vk.Image, format: vk.Format, aspect_flags: vk.ImageAspectFlags, mip_levels: u32) error {VkNotSuccess}!vk.ImageView {
@@ -1087,6 +1109,15 @@ pub fn createGraphicsPipeline(self: VulkanContext, shader_code: []align(4) const
         .pScissors = &scissor,
     };
 
+    const dynamic_state: vk.PipelineDynamicStateCreateInfo = .{
+        .sType = helpers.vkSType(vk.PipelineDynamicStateCreateInfo),
+        .dynamicStateCount = 2,
+        .pDynamicStates = &[2]vk.DynamicState {
+            vk.dynamic_state_viewport,
+            vk.dynamic_state_scissor,
+        },
+    };
+
     const rasterizer: vk.PipelineRasterizationStateCreateInfo = .{
         .sType = vk.structure_type_pipeline_rasterization_state_create_info,
         .depthClampEnable = vk.@"false",
@@ -1139,7 +1170,7 @@ pub fn createGraphicsPipeline(self: VulkanContext, shader_code: []align(4) const
         .pMultisampleState = &multisampling,
         //.pDepthStencilState = &depth_stencil,
         .pColorBlendState = &color_blending,
-        //.pDynamicState = &dynamic_state,
+        .pDynamicState = &dynamic_state,
         //.renderPass = self.render_pass,
         //.subpass = 0,
         .renderPass = null,
