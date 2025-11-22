@@ -48,6 +48,9 @@ pub fn ensureAlloc(allocate_result: anytype) @typeInfo(@TypeOf(allocate_result))
 pub fn alloc(comptime T: type, count: usize) []T {
     return ensureAlloc(allocator.alloc(T, count));
 }
+pub fn create(comptime T: type) *T {
+    return ensureAlloc(allocator.create(T));
+}
 
 /// ensure array elements are monotonically increasing
 pub fn ensureMonoIncrease(comptime T: type, arr: []const T) void {
@@ -275,4 +278,3 @@ pub fn vkSType(comptime T: type) vk.StructureType {
         else => @compileError(@typeName(T) ++ " is not indexing structure type"),
     };
 }
-

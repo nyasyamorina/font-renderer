@@ -1,6 +1,7 @@
 const std = @import("std");
 
 const Appli = @import("Appli.zig");
+const CallbackContext = @import("CallbackContext.zig");
 const Config = @import("Config.zig");
 const Font = @import("font/Font.zig");
 const glfw = @import("c/glfw.zig");
@@ -31,9 +32,9 @@ pub fn main() !void {
     var font: Font = try .initTTF(ttf_file, 1024);
     defer font.deinit();
 
-    const glyph = try font.getGlyph('δ');
-    var triangle_glyph: TriangulatedGlyph = .init(glyph);
-    defer triangle_glyph.deinit();
+    //const glyph = try font.getGlyph('δ');
+    //var triangle_glyph: TriangulatedGlyph = .init(glyph);
+    //defer triangle_glyph.deinit();
 
     //var glyph_debug: Image.GlyphDebug = .render(glyph, 50);
     //defer glyph_debug.rgb.deinit();
@@ -45,10 +46,11 @@ pub fn main() !void {
     //defer qoi_writer.interface.flush() catch {};
     //try qoi.saveRGB(&qoi_writer.interface, &glyph_debug.rgb.interface);
 
-    var appli: Appli = try .init(.{ .width = 800, .height = 800 }, "font renderer");
+    var callback_ctx: CallbackContext = .{};
+    var appli: Appli = try .init(&font, &callback_ctx, .{ .width = 800, .height = 800 }, "font renderer");
     defer appli.deinit();
 
-    helpers.ensureAlloc(appli.glyph_objects.append(helpers.allocator, try .init(appli.vk_ctx, triangle_glyph)));
+    try appli.setChar('δ');
+    try appli.setChar('β');
     try appli.mainLoop();
 }
-

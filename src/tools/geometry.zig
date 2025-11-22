@@ -268,13 +268,15 @@ pub const Triangulation = struct {
         const xo = self.vertices[origin_conn.@"0"].position.to(i32).sub(o);
         const yo = self.vertices[origin_conn.@"1"].position.to(i32).sub(o);
         const po = self.vertices[target].position.to(i32).sub(o);
+        const xopo = xo.dot(po);
+        const xoyo = xo.dot(yo);
 
         const tmp = std.math.order(xo.x * po.y, xo.y * po.x);
         const cmp: std.math.CompareOperator = switch (origin_conn.@"2") {
             .eq => return tmp == .gt,
             .lt => switch (tmp) {
                 .gt => return true,
-                .eq => return xo.dot(po) < 0,
+                .eq => return xopo < 0,
                 .lt => .lt,
             },
             .gt => switch (tmp) {
@@ -282,7 +284,11 @@ pub const Triangulation = struct {
                 .gt => .gt,
             },
         };
-        return std.math.compare(@as(f32, @floatFromInt(xo.dot(po))) * std.math.sqrt(@as(f32, @floatFromInt(yo.dot(yo)))), cmp, @as(f32, @floatFromInt(xo.dot(yo))) * std.math.sqrt(@as(f32, @floatFromInt(po.dot(po)))));
+
+        if ((xopo > 0) ^ (xoyo > 0)) return !((xopo > 0) ^ (cmp == .gt));
+        const tmp2 = std.math.order(@as(i64, yo.dot(yo)) * xopo * xopo, @as(i64, po.dot(po)) * xoyo * xoyo);
+        if (tmp2 == .eq) return false;
+        return (xopo > 0) ^ (cmp == .gt) ^ (tmp2 == .gt);
     }
 
     fn isCross(self: Triangulation, edge1: [2]u16, edge2: [2]u16) bool {
@@ -310,4 +316,3 @@ pub const Triangulation = struct {
         return if (xo.x * yo.y < xo.y * yo.x) .{face[0], face[2], face[1]} else face;
     }
 };
-

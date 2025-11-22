@@ -6,6 +6,8 @@ const vk = @import("c/vk.zig");
 const helpers = @import("helpers.zig");
 
 const VulkanContext = @This();
+const CallbackContext = @import("CallbackContext.zig");
+const Point = @import("tools/geometry.zig").Point;
 const Vertex = @import("tools/TriangulatedGlyph.zig").Vertex;
 const log = std.log.scoped(.VulkanContext);
 const ensureAlloc = helpers.ensureAlloc;
@@ -13,6 +15,7 @@ const ensureVkSuccess = helpers.ensureVkSuccess;
 const enable_validation = builtin.mode == .Debug;
 
 
+cb_ctx: *CallbackContext,
 window: ?*glfw.Window = null,
 instance: vk.Instance = null,
 debug_messenger: vk.DebugUtilsMessengerEXT = null,
@@ -36,8 +39,8 @@ in_flight_frame: u32 = 0,
 pub const max_frames_in_flight = 2;
 
 
-pub fn init(window_size: vk.Extent2D, window_title: [*:0]const u8) !VulkanContext {
-    var self: VulkanContext = .{};
+pub fn init(cb_ctx: *CallbackContext, window_size: vk.Extent2D, window_title: [*:0]const u8) !VulkanContext {
+    var self: VulkanContext = .{ .cb_ctx = cb_ctx };
 
     try self.createWindow(window_size, window_title);
     errdefer glfw.destroyWindow(self.window);
@@ -73,12 +76,25 @@ pub fn deinit(self: *VulkanContext) void {
 pub fn startMainLoop(self: *VulkanContext, comptime renderFn: fn (data: ?*anyopaque, command_buffer: vk.CommandBuffer) anyerror!void, data: ?*anyopaque) !void {
     defer _ = vk.deviceWaitIdle(self.device);
     while (glfw.windowShouldClose(self.window) == vk.@"false") : (self.in_flight_frame = (self.in_flight_frame + 1) % max_frames_in_flight) {
+        if (self.surface_info.extent.width == 0 or self.surface_info.extent.height == 0) {
+            std.debug.print("minimized\n", .{});
+            var w: c_int = 0; var h: c_int = 0;
+            while (w == 0 or h == 0) glfw.getFramebufferSize(self.window, &w, &h);
+
+            std.debug.print("un-minimized\n", .{});
+            self.destroySwapchainStuff(false);
+            try self.createSwapchainStuff(.{ .old_swapchain = self.swapchain, .update_extent = true });
+            continue;
+        }
+
+        std.Thread.sleep(30 * std.time.ns_per_ms);
         glfw.pollEvents();
 
         const current_fence = self.in_flight_fences[self.in_flight_frame];
         try ensureVkSuccess("vkWaitForFences", vk.waitForFences(self.device, 1, &current_fence, vk.@"true", std.math.maxInt(u64)));
 
         const acquire_result = self.swapchain_operations.acquireNextImage(self.device, self.swapchain, null, null);
+        if (acquire_result.result != 0) std.debug.print("acquire result: {d}\n", .{acquire_result.result});
         switch (acquire_result.result) {
             vk.success, vk.suboptimal_KHR => {},
             vk.error_out_of_date_KHR => {
@@ -112,11 +128,12 @@ pub fn startMainLoop(self: *VulkanContext, comptime renderFn: fn (data: ?*anyopa
         }, current_fence));
 
         const present_result = self.swapchain_operations.present(self.queues.present, self.swapchain, acquire_result);
-        switch (present_result) {
-            vk.success => {},
+        sw: switch (present_result) {
+            vk.success => if (self.cb_ctx.resized) continue :sw vk.suboptimal_KHR,
             vk.suboptimal_KHR, vk.error_out_of_date_KHR => {
                 self.destroySwapchainStuff(false);
                 try self.createSwapchainStuff(.{ .old_swapchain = self.swapchain, .update_extent = true });
+                self.cb_ctx.resized = false;
                 continue;
             },
             else => {
@@ -210,10 +227,16 @@ fn endRendering(self: VulkanContext, command_buffer: vk.CommandBuffer, swapchain
 
 fn createWindow(self: *VulkanContext, window_size: vk.Extent2D, window_title: [*:0]const u8) !void {
     glfw.windowHint(glfw.client_api, glfw.no_api);
-    glfw.windowHint(glfw.resizable, glfw.@"false");
+    glfw.windowHint(glfw.resizable, glfw.@"true");
+    glfw.windowHint(glfw.transparent_framebuffer, glfw.@"true");
 
     self.window = glfw.createWindow(@intCast(window_size.width), @intCast(window_size.height), window_title, null, null);
     if (self.window == null) return error.FailedToCreateWindow;
+
+    glfw.setWindowUserPointer(self.window, @ptrCast(self.cb_ctx));
+    _ = glfw.setFramebufferSizeCallback(self.window, &CallbackContext.resizeCallback);
+    _ = glfw.setScrollCallback(self.window, &CallbackContext.scrollCallback);
+    _ = glfw.setMouseButtonCallback(self.window, &CallbackContext.mouseButtonCallback);
 }
 
 
@@ -682,7 +705,7 @@ fn createSwapchainStuff(self: *VulkanContext, opts: CreateSwapchainStuffOptions)
         .imageSharingMode = if (unique_queue_families.count() < 2) vk.sharing_mode_exclusive else vk.sharing_mode_concurrent,
         .queueFamilyIndexCount = @intCast(unique_queue_families.count()),
         .pQueueFamilyIndices = unique_queue_families.keys().ptr,
-        .compositeAlpha = vk.composite_alpha_opaque_bit_KHR,
+        .compositeAlpha = vk.composite_alpha_pre_multiplied_bit_KHR,
         .oldSwapchain = opts.old_swapchain,
     };
     try ensureVkSuccess("vkCreateSwapchainKHR", vk.createSwapchainKHR(self.device, &swapchain_info, null, &self.swapchain));
@@ -992,17 +1015,17 @@ fn createShaderModule(self: VulkanContext, code: []align(4) const u8) !vk.Shader
     return shader_module;
 }
 
-pub fn createPipelineLayout(self: VulkanContext) !vk.PipelineLayout {
+pub fn createPipelineLayout(self: VulkanContext, comptime PushVertexConstantObject: ?type) !vk.PipelineLayout {
     const pipeline_layout_info: vk.PipelineLayoutCreateInfo = .{
         .sType = vk.structure_type_pipeline_layout_create_info,
         //.setLayoutCount = 1,
         //.pSetLayouts = &self.descriptor_set_layout,
-        //.pushConstantRangeCount = 1,
-        //.pPushConstantRanges = &.{
-        //    .stageFlags = vk.shader_stage_fragment_bit,
-        //    .offset = 0,
-        //    .size = @sizeOf(PushConstantsObject),
-        //},
+        .pushConstantRangeCount = if (PushVertexConstantObject) |_| 1 else 0,
+        .pPushConstantRanges = if (PushVertexConstantObject) |PSO| &.{
+            .stageFlags = vk.shader_stage_vertex_bit,
+            .offset = 0,
+            .size = @sizeOf(PSO),
+        } else null,
     };
 
     var pipeline_layout: vk.PipelineLayout = null;
@@ -1129,3 +1152,13 @@ pub fn createGraphicsPipeline(self: VulkanContext, shader_code: []align(4) const
     return pipeline;
 }
 
+
+pub fn getCursor(self: VulkanContext) Point(f32) {
+    var cursor_x: f64 = 0; var cursor_y: f64 = 0;
+    glfw.getCursorPos(self.window, &cursor_x, &cursor_y);
+    const screen_x = @as(f32, @floatCast(cursor_x)) / @as(f32, @floatFromInt(self.surface_info.extent.width));
+    const screen_y = @as(f32, @floatCast(cursor_y)) / @as(f32, @floatFromInt(self.surface_info.extent.height));
+    const frame_x = 2 * screen_x - 1;
+    const frame_y = 1 - 2 * screen_y;
+    return .{ .x = frame_x, .y = frame_y };
+}
