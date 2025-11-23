@@ -27,9 +27,9 @@ pub fn build(b: *std.Build) !void {
     exe.root_module.addIncludePath(b.path("third-party/glfw-3.4/include"));
     if (is_windows) exe.root_module.addLibraryPath(b.path("third-party/glfw-3.4/lib"));
     exe.root_module.linkSystemLibrary("glfw3", .{});
-    if (is_windows) b.installBinFile("third-party/glfw-3.4/lib/glfw3.dll", "bin/glfw3.dll");
+    if (is_windows) b.installBinFile("third-party/glfw-3.4/lib/glfw3.dll", "glfw3.dll");
 
-    try compileSlangShader(b, exe, "shader.slang", &.{"vertMain", "curveMain", "solidMain"});
+    try compileSlangShader(b, exe, "shader.slang", &.{"vertMain", "concaveMain", "convexMain", "solidMain"});
 
     b.installArtifact(exe);
 
@@ -59,4 +59,3 @@ fn compileSlangShader(b: *std.Build, exe: *std.Build.Step.Compile, name: []const
 
     exe.root_module.addAnonymousImport(name, .{ .root_source_file = spv });
 }
-

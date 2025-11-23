@@ -278,3 +278,21 @@ pub fn vkSType(comptime T: type) vk.StructureType {
         else => @compileError(@typeName(T) ++ " is not indexing structure type"),
     };
 }
+
+
+pub var timer: struct {
+    time_ns: i128 = 0,
+
+    const log = std.log.scoped(.timer);
+
+    pub fn restart(self: *@This()) void {
+        self.time_ns = std.time.nanoTimestamp();
+    }
+
+    pub fn report(self: *@This(), name: [:0]const u8) void {
+        const curr_time = std.time.nanoTimestamp();
+        const diff = curr_time - self.time_ns;
+        log.info("{s} |> {d} ns", .{name, diff});
+        self.time_ns = curr_time;
+    }
+} = .{};

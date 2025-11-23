@@ -6,6 +6,7 @@ const vk = @import("c/vk.zig");
 const helpers = @import("helpers.zig");
 
 const VulkanContext = @This();
+const Appli = @import("Appli.zig");
 const CallbackContext = @import("CallbackContext.zig");
 const Point = @import("tools/geometry.zig").Point;
 const Vertex = @import("tools/TriangulatedGlyph.zig").Vertex;
@@ -21,6 +22,11 @@ instance: vk.Instance = null,
 debug_messenger: vk.DebugUtilsMessengerEXT = null,
 surface: vk.SurfaceKHR = null,
 physical_device: vk.PhysicalDevice = null,
+msaa_sample_count: vk.SampleCountFlagBits = vk.sample_count_1_bit,
+color_image: vk.Image = null,
+color_image_view: vk.ImageView = null,
+color_image_memory: vk.DeviceMemory = null,
+color_attachment_info: vk.RenderingAttachmentInfo = .{},
 device_memory_types: []vk.MemoryType = &.{},
 device: vk.Device = null,
 queue_families: QueueFamilies = undefined,
@@ -42,6 +48,14 @@ pub const max_frames_in_flight = 2;
 
 pub fn init(cb_ctx: *CallbackContext, window_size: vk.Extent2D, window_title: [*:0]const u8) !VulkanContext {
     var self: VulkanContext = .{ .cb_ctx = cb_ctx };
+    self.color_attachment_info = .{
+        .sType = helpers.vkSType(vk.RenderingAttachmentInfo),
+        .imageLayout = vk.image_layout_color_attachment_optimal,
+        .resolveImageLayout = vk.image_layout_color_attachment_optimal,
+        .loadOp = vk.attachment_load_op_clear,
+        .storeOp = vk.attachment_store_op_store,
+        .clearValue = .{ .color = .{ .float32 = .{0, 0, 0, 0} } },
+    };
 
     try self.createWindow(window_size, window_title);
     errdefer glfw.destroyWindow(self.window);
@@ -64,6 +78,7 @@ pub fn init(cb_ctx: *CallbackContext, window_size: vk.Extent2D, window_title: [*
 }
 
 pub fn deinit(self: *VulkanContext) void {
+    self.destroyMsaaStuff();
     self.destroyRenderingObjects();
     self.swapchain_operations.deinit(self.device);
     self.destroySwapchainStuff(true);
@@ -75,9 +90,10 @@ pub fn deinit(self: *VulkanContext) void {
     glfw.destroyWindow(self.window);
 }
 
-pub fn startMainLoop(self: *VulkanContext, comptime renderFn: fn (data: ?*anyopaque, command_buffer: vk.CommandBuffer) anyerror!void, data: ?*anyopaque) !void {
+pub fn startMainLoop(self: *VulkanContext, appli: *Appli) !void {
     defer _ = vk.deviceWaitIdle(self.device);
     while (glfw.windowShouldClose(self.window) == vk.@"false") : (self.in_flight_frame = (self.in_flight_frame + 1) % max_frames_in_flight) {
+        if (self.cb_ctx.esc_pressed) glfw.setWindowShouldClose(self.window, glfw.@"true");
         if (self.surface_info.extent.width == 0 or self.surface_info.extent.height == 0) {
             var w: c_int = 0; var h: c_int = 0;
             while (w == 0 or h == 0) {
@@ -88,11 +104,31 @@ pub fn startMainLoop(self: *VulkanContext, comptime renderFn: fn (data: ?*anyopa
             continue;
         }
 
-        std.Thread.sleep(30 * std.time.ns_per_ms);
+        //helpers.timer.restart();
         glfw.pollEvents();
+        //helpers.timer.report("glfw.pollEvents");
+
+        if (self.cb_ctx.change_msaa) blk: {
+            self.cb_ctx.change_msaa = false;
+            _ = vk.deviceWaitIdle(self.device);
+            if (self.msaaRenderingEnabled()) {
+                log.debug("desabling msaa", .{});
+                self.disableMsaaRendering();
+            } else if (self.msaa_sample_count == vk.sample_count_1_bit) {
+                log.warn("anisotropy sampling is not available on this device, msaa disabled", .{});
+                break :blk;
+            } else {
+                log.debug("enabling msaa", .{});
+                errdefer self.disableMsaaRendering();
+                try self.enableMsaaRendering();
+            }
+            try appli.recreateGraphicsPipeline();
+            //helpers.timer.report("change_msaa");
+        }
 
         const current_fence = self.in_flight_fences[self.in_flight_frame];
         try ensureVkSuccess("vkWaitForFences", vk.waitForFences(self.device, 1, &current_fence, vk.@"true", std.math.maxInt(u64)));
+        //helpers.timer.report("vk.waitForFences");
 
         const acquire_result = self.swapchain_operations.acquireNextImage(self.device, self.swapchain, null, null);
         switch (acquire_result.result) {
@@ -106,14 +142,17 @@ pub fn startMainLoop(self: *VulkanContext, comptime renderFn: fn (data: ?*anyopa
                 return error.VkNotSuccess;
             },
         }
+        //helpers.timer.report("acquireNextImage");
 
         const current_command_buffer = self.command_buffers[self.in_flight_frame];
         try ensureVkSuccess("vkResetCommandBuffer", vk.resetCommandBuffer(current_command_buffer, 0));
         try ensureVkSuccess("vkResetFences", vk.resetFences(self.device, 1, &current_fence));
 
         try self.beginRendering(current_command_buffer, acquire_result.image_index);
-        try renderFn(data, current_command_buffer);
+        //helpers.timer.report("beginRendering");
+        try appli.renderingFn(current_command_buffer);
         try self.endRendering(current_command_buffer, acquire_result.image_index);
+        //helpers.timer.report("endRendering");
 
         try ensureVkSuccess("vkQueueSubmit", vk.queueSubmit(self.queues.graphics, 1, &.{
             .sType = vk.structure_type_submit_info,
@@ -137,12 +176,12 @@ pub fn startMainLoop(self: *VulkanContext, comptime renderFn: fn (data: ?*anyopa
                 std.log.scoped(.vk).err("unexpected result {d} returned from {s}", .{acquire_result.result, "vkQueuePresentKHR"});
                 return error.VkNotSuccess;
             },
-
         }
+        //helpers.timer.report("present");
     }
 }
 
-fn beginRendering(self: VulkanContext, command_buffer: vk.CommandBuffer, swapchain_image_index: u32) !void {
+fn beginRendering(self: *VulkanContext, command_buffer: vk.CommandBuffer, swapchain_image_index: u32) !void {
     try ensureVkSuccess("vkBeginCommandBuffer", vk.beginCommandBuffer(command_buffer, &.{ .sType = helpers.vkSType(vk.CommandBufferBeginInfo) }));
 
     vk.cmdPipelineBarrier2(command_buffer, &.{
@@ -169,6 +208,12 @@ fn beginRendering(self: VulkanContext, command_buffer: vk.CommandBuffer, swapcha
         },
     });
 
+    const swapchain_image_view = self.swapchain_image_views.items[swapchain_image_index];
+    if (self.msaaRenderingEnabled()) {
+        self.color_attachment_info.resolveImageView = swapchain_image_view;
+    } else {
+        self.color_attachment_info.imageView = swapchain_image_view;
+    }
     vk.cmdBeginRendering(command_buffer, &.{
         .sType = helpers.vkSType(vk.RenderingInfo),
         .renderArea = .{
@@ -177,17 +222,7 @@ fn beginRendering(self: VulkanContext, command_buffer: vk.CommandBuffer, swapcha
         },
         .layerCount = 1,
         .colorAttachmentCount = 1,
-        .pColorAttachments = &.{
-            .sType = helpers.vkSType(vk.RenderingAttachmentInfo),
-            .imageView = self.swapchain_image_views.items[swapchain_image_index],
-            .imageLayout = vk.image_layout_color_attachment_optimal,
-            //.resolveImageView = self.swapchain_image_views.items[image_index],
-            //.resolveImageLayout = vk.image_layout_color_attachment_optimal,
-            //.resolveMode = vk.resolve_mode_average_bit,
-            .loadOp = vk.attachment_load_op_clear,
-            .storeOp = vk.attachment_store_op_store,
-            .clearValue = .{ .color = .{ .float32 = .{0, 0, 0, 0} } },
-        },
+        .pColorAttachments = &self.color_attachment_info,
     });
 }
 
@@ -234,6 +269,73 @@ pub fn setGraphicsPipelineDynamicStuff(self: VulkanContext, command_buffer: vk.C
 }
 
 
+pub fn msaaRenderingEnabled(self: VulkanContext) bool {
+    return self.color_attachment_info.resolveMode != 0;
+}
+
+pub fn enableMsaaRendering(self: *VulkanContext) !void {
+    std.debug.assert(!self.msaaRenderingEnabled());
+    errdefer self.destroyMsaaStuff();
+
+    const info: Image2DInfo = .{
+        .tiling = vk.image_tiling_optimal,
+        .usage = vk.image_usage_transient_attachment_bit | vk.image_usage_color_attachment_bit,
+        .aspects = vk.image_aspect_color_bit,
+        .extent = self.surface_info.extent,
+        .format = self.surface_info.format.format,
+        .sample_count = self.msaa_sample_count,
+    };
+    self.color_image, self.color_image_memory = try self.createImage(info, vk.memory_property_device_local_bit);
+    self.color_image_view = try self.createImageView(self.color_image, info);
+
+    const command_buffer = try self.beginSingleTimeCommands();
+    defer vk.freeCommandBuffers(self.device, self.command_pools.graphics, 1, &command_buffer);
+    vk.cmdPipelineBarrier2(command_buffer, &.{
+        .sType = helpers.vkSType(vk.DependencyInfo),
+        .imageMemoryBarrierCount = 1,
+        .pImageMemoryBarriers = &.{
+            .sType = helpers.vkSType(vk.ImageMemoryBarrier2),
+            .srcStageMask = vk.pipeline_stage_2_top_of_pipe_bit,
+            .dstStageMask = vk.pipeline_stage_2_color_attachment_output_bit,
+            .srcAccessMask = 0,
+            .dstAccessMask = vk.access_2_color_attachment_write_bit,
+            .image = self.color_image,
+            .oldLayout = vk.image_layout_undefined,
+            .newLayout = vk.image_layout_color_attachment_optimal,
+            .srcQueueFamilyIndex = vk.queue_family_ignored,
+            .dstQueueFamilyIndex = vk.queue_family_ignored,
+            .subresourceRange = .{
+                .aspectMask = vk.image_aspect_color_bit,
+                .baseMipLevel = 0,
+                .levelCount = 1,
+                .baseArrayLayer = 0,
+                .layerCount = 1,
+            },
+        },
+    });
+    try self.endSingleTimeCommands(command_buffer);
+
+    self.color_attachment_info.imageView = self.color_image_view;
+    self.color_attachment_info.resolveMode = vk.resolve_mode_average_bit;
+}
+
+pub fn disableMsaaRendering(self: *VulkanContext) void {
+    std.debug.assert(self.msaaRenderingEnabled());
+    self.destroyMsaaStuff();
+    self.color_attachment_info.resolveImageView = null;
+    self.color_attachment_info.resolveMode = 0;
+}
+
+fn destroyMsaaStuff(self: *VulkanContext) void {
+    if (self.color_image_view) |view| {vk.destroyImageView(self.device, view, null);}
+    self.color_image_view = null;
+    if (self.color_image_memory) |mem| vk.freeMemory(self.device, mem, null);
+    self.color_image_memory = null;
+    if (self.color_image) |im| vk.destroyImage(self.device, im, null);
+    self.color_image = null;
+}
+
+
 fn createWindow(self: *VulkanContext, window_size: vk.Extent2D, window_title: [*:0]const u8) !void {
     glfw.windowHint(glfw.client_api, glfw.no_api);
     glfw.windowHint(glfw.resizable, glfw.@"true");
@@ -251,6 +353,7 @@ fn createWindow(self: *VulkanContext, window_size: vk.Extent2D, window_title: [*
     _ = glfw.setFramebufferSizeCallback(self.window, &CallbackContext.resizeCallback);
     _ = glfw.setScrollCallback(self.window, &CallbackContext.scrollCallback);
     _ = glfw.setMouseButtonCallback(self.window, &CallbackContext.mouseButtonCallback);
+    _ = glfw.setKeyCallback(self.window, &CallbackContext.keyCallback);
 }
 
 
@@ -432,6 +535,7 @@ pub const device_features = blk: {
 fn pickAndCreateDevice(self: *VulkanContext) !void {
     // select physical device
     var count: u32 = 0;
+    var has_anisotropy = false;
     try ensureVkSuccess("vkEnumeratePhysicalDevices", vk.enumeratePhysicalDevices(self.instance, &count, null));
     switch (count) {
         0 => {
@@ -440,7 +544,7 @@ fn pickAndCreateDevice(self: *VulkanContext) !void {
         },
         1 => {
             try ensureVkSuccess("vkEnumeratePhysicalDevices", vk.enumeratePhysicalDevices(self.instance, &count, &self.physical_device));
-            if (!self.checkPhysicalDeviceSuitabilities(self.physical_device)) {
+            if (!self.checkPhysicalDeviceSuitabilities(self.physical_device, &has_anisotropy)) {
                 var properties: vk.PhysicalDeviceProperties = .{};
                 vk.getPhysicalDeviceProperties(self.physical_device, &properties);
                 log.err("the only vulkan supported device: \"{s}\" is not suitable for this application", .{properties.deviceName});
@@ -454,7 +558,7 @@ fn pickAndCreateDevice(self: *VulkanContext) !void {
             try ensureVkSuccess("vkEnumeratePhysicalDevices", vk.enumeratePhysicalDevices(self.instance, &count, devices.ptr));
 
             for (devices) |device| {
-                if (self.checkPhysicalDeviceSuitabilities(device)) {
+                if (self.checkPhysicalDeviceSuitabilities(device, &has_anisotropy)) {
                     self.physical_device = device;
                     break;
                 } else {
@@ -476,6 +580,17 @@ fn pickAndCreateDevice(self: *VulkanContext) !void {
     errdefer helpers.allocator.free(self.device_memory_types);
     @memcpy(self.device_memory_types, mem_prop.memoryTypes[0 .. mem_prop.memoryTypeCount]);
 
+    // msaa samples
+    if (has_anisotropy) {
+        var properties: vk.PhysicalDeviceProperties = .{};
+        vk.getPhysicalDeviceProperties(self.physical_device, &properties);
+        const msaa_supported = properties.limits.framebufferColorSampleCounts;
+        if (msaa_supported >= 2) {
+            self.msaa_sample_count = @as(vk.SampleCountFlagBits, 1) << std.math.log2_int(vk.SampleCountFlags, msaa_supported);
+            log.debug("maximum msaa sample count: {d}", .{self.msaa_sample_count});
+        }
+    }
+
     // queues
     var unique_queue_families = self.queue_families.uniqueSetAlloc();
     defer unique_queue_families.deinit(helpers.allocator);
@@ -490,6 +605,7 @@ fn pickAndCreateDevice(self: *VulkanContext) !void {
     }
 
     var enabled_features = device_features;
+    enabled_features.features.@"2".features.samplerAnisotropy = if (self.msaa_sample_count != vk.sample_count_1_bit) vk.@"true" else vk.false;
     const device_info: vk.DeviceCreateInfo = .{
         .sType = vk.structure_type_device_create_info,
         .pNext = @ptrCast(enabled_features.buildChain()),
@@ -519,7 +635,7 @@ fn findMemoryType(self: VulkanContext, type_filter: u32, properties: vk.MemoryPr
     } else return error.FailedToFindMemoryType;
 }
 
-fn checkPhysicalDeviceSuitabilities(self: *VulkanContext, device: vk.PhysicalDevice) bool {
+fn checkPhysicalDeviceSuitabilities(self: *VulkanContext, device: vk.PhysicalDevice, has_anisitropy: *bool) bool {
     // check device api version
     var device_properties: vk.PhysicalDeviceProperties = .{};
     vk.getPhysicalDeviceProperties(device, &device_properties);
@@ -532,6 +648,7 @@ fn checkPhysicalDeviceSuitabilities(self: *VulkanContext, device: vk.PhysicalDev
     var check_features: @TypeOf(device_features) = .init;
     vk.getPhysicalDeviceFeatures2(device, check_features.buildChain());
     if (!check_features.check(device_features)) return false;
+    has_anisitropy.* = check_features.features.@"2".features.samplerAnisotropy != vk.@"false";
 
     // check device extensions
     var count: u32 = 0;
@@ -736,7 +853,13 @@ fn createSwapchainStuff(self: *VulkanContext, opts: CreateSwapchainStuffOptions)
     // swapchain image views
     ensureAlloc(self.swapchain_image_views.ensureUnusedCapacity(helpers.allocator, count));
     errdefer for (self.swapchain_image_views.items) |image_view| vk.destroyImageView(self.device, image_view, null);
-    for (self.swapchain_images.items) |image| self.swapchain_image_views.appendAssumeCapacity(try self.createImageView(image, self.surface_info.format.format, vk.image_aspect_color_bit, 1));
+    for (self.swapchain_images.items) |image| self.swapchain_image_views.appendAssumeCapacity(try self.createImageView(image, .{
+        .tiling = undefined,
+        .usage = undefined,
+        .aspects = vk.image_aspect_color_bit,
+        .extent = self.surface_info.extent,
+        .format = self.surface_info.format.format,
+    }));
 }
 
 fn destroySwapchainStuff(self: *VulkanContext, cleanup: bool) void {
@@ -757,25 +880,6 @@ fn recreateSwapchainStuff(self: *VulkanContext, opts: CreateSwapchainStuffOption
     self.destroySwapchainStuff(false);
     try self.createSwapchainStuff(opts);
     self.cb_ctx.resized = false;
-}
-
-pub fn createImageView(self: VulkanContext, image: vk.Image, format: vk.Format, aspect_flags: vk.ImageAspectFlags, mip_levels: u32) error {VkNotSuccess}!vk.ImageView {
-    const view_info: vk.ImageViewCreateInfo = .{
-        .sType = vk.structure_type_image_view_create_info,
-        .image = image,
-        .viewType = vk.image_view_type_2d,
-        .format = format,
-        .subresourceRange = .{
-            .aspectMask = aspect_flags,
-            .baseMipLevel = 0,
-            .levelCount = mip_levels,
-            .baseArrayLayer = 0,
-            .layerCount = 1,
-        },
-    };
-    var image_view: vk.ImageView = null;
-    try ensureVkSuccess("vkCreateImageView", vk.createImageView(self.device, &view_info, null, &image_view));
-    return image_view;
 }
 
 pub const CommandPools = struct {
@@ -1131,8 +1235,7 @@ pub fn createGraphicsPipeline(self: VulkanContext, shader_code: []align(4) const
 
     const multisampling: vk.PipelineMultisampleStateCreateInfo = .{
         .sType = vk.structure_type_pipeline_multisample_state_create_info,
-        //.sampleShadingEnable = vk.@"true",
-        .rasterizationSamples = vk.sample_count_1_bit, //self.mass_samples,
+        .rasterizationSamples = if (self.msaaRenderingEnabled()) self.msaa_sample_count else vk.sample_count_1_bit,
     };
 
     const color_blend_attachment: vk.PipelineColorBlendAttachmentState = .{
@@ -1168,12 +1271,8 @@ pub fn createGraphicsPipeline(self: VulkanContext, shader_code: []align(4) const
         .pViewportState = &viewport_state,
         .pRasterizationState = &rasterizer,
         .pMultisampleState = &multisampling,
-        //.pDepthStencilState = &depth_stencil,
         .pColorBlendState = &color_blending,
         .pDynamicState = &dynamic_state,
-        //.renderPass = self.render_pass,
-        //.subpass = 0,
-        .renderPass = null,
         .pNext = @ptrCast(&pipeline_rendering_create_info),
         .layout = pipeline_layout,
     };
@@ -1181,6 +1280,67 @@ pub fn createGraphicsPipeline(self: VulkanContext, shader_code: []align(4) const
     var pipeline: vk.Pipeline = null;
     try ensureVkSuccess("vkCreateGraphicsPipelines", vk.createGraphicsPipelines(self.device, null, 1, &pipeline_info, null, &pipeline));
     return pipeline;
+}
+
+
+const Image2DInfo = struct {
+    extent: vk.Extent2D,
+    mip_levels: u32 = 1,
+    sample_count: vk.SampleCountFlagBits = vk.sample_count_1_bit,
+    format: vk.Format,
+    tiling: vk.ImageTiling,
+    usage: vk.ImageUsageFlags,
+    aspects: vk.ImageAspectFlags,
+};
+
+pub fn createImage(self: VulkanContext, info: Image2DInfo, mem_properties: vk.MemoryPropertyFlags) !struct {vk.Image, vk.DeviceMemory} {
+    var image: vk.Image = null;
+    try ensureVkSuccess("vkCreateImage", vk.createImage(self.device, &.{
+        .sType = helpers.vkSType(vk.ImageCreateInfo),
+        .imageType = vk.image_type_2d,
+        .arrayLayers = 1,
+        .initialLayout = vk.image_layout_undefined,
+        .sharingMode = vk.sharing_mode_exclusive,
+        .mipLevels = info.mip_levels,
+        .format = info.format,
+        .tiling = info.tiling,
+        .usage = info.usage,
+        .samples = info.sample_count,
+        .extent = .{ .width = info.extent.width, .height = info.extent.height, .depth = 1 },
+    }, null, &image));
+    errdefer vk.destroyImage(self.device, image, null);
+
+    var mem_requirements: vk.MemoryRequirements = .{};
+    vk.getImageMemoryRequirements(self.device, image, &mem_requirements);
+
+    var memory: vk.DeviceMemory = null;
+    try ensureVkSuccess("vkAllocateMemory", vk.allocateMemory(self.device, &.{
+        .sType = helpers.vkSType(vk.MemoryAllocateInfo),
+        .allocationSize = mem_requirements.size,
+        .memoryTypeIndex = try self.findMemoryType(mem_requirements.memoryTypeBits, mem_properties),
+    }, null, &memory));
+    errdefer vk.freeMemory(self.device, memory, null);
+
+    try ensureVkSuccess("vkBindImageMemory", vk.bindImageMemory(self.device, image, memory, 0));
+    return .{image, memory};
+}
+
+pub fn createImageView(self: VulkanContext, image: vk.Image, info: Image2DInfo) !vk.ImageView {
+    var image_view: vk.ImageView = null;
+    try ensureVkSuccess("vkCreateImageView", vk.createImageView(self.device, &.{
+        .sType = vk.structure_type_image_view_create_info,
+        .image = image,
+        .viewType = vk.image_view_type_2d,
+        .format = info.format,
+        .subresourceRange = .{
+            .aspectMask = info.aspects,
+            .baseMipLevel = 0,
+            .levelCount = info.mip_levels,
+            .baseArrayLayer = 0,
+            .layerCount = 1,
+        },
+    }, null, &image_view));
+    return image_view;
 }
 
 

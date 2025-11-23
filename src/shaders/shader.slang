@@ -29,20 +29,19 @@ VertOut vertMain(Vertex vertex) {
 }
 
 [shader("fragment")]
-float4 curveMain(VertOut input) : SV_Target {
-    float tmp = 1.0 + input.tex_coord.x - input.tex_coord.y;
+float4 concaveMain(VertOut input) : SV_Target {
     float3 ccc = float3(225.0, 105.0, 180.0) / 255.0;
-    if (input.tex_coord.x + input.tex_coord.y > 1.0) { // concave
-        float2 tex_coord = (1.0 - input.tex_coord).yx;
-        float tmp = 1.0 + tex_coord.x - tex_coord.y;
-        if (tmp * tmp < 4.0 * tex_coord.x) discard;
-        return float4(ccc, 1.0);
-    } else { // convex
-        float tmp = 1.0 + input.tex_coord.x - input.tex_coord.y;
-        if (tmp * tmp > 4.0 * input.tex_coord.x) discard;
-        return float4(ccc, 1.0);
-    }
-    return float4(1.0, 1.0, 1.0, 1.0);
+    float tmp = 1.0 + input.tex_coord.x - input.tex_coord.y;
+    if (tmp * tmp < 4.0 * input.tex_coord.x) discard;
+    return float4(ccc, 1.0);
+}
+
+[shader("fragment")]
+float4 convexMain(VertOut input) : SV_Target {
+    float3 ccc = float3(225.0, 105.0, 180.0) / 255.0;
+    float tmp = 1.0 + input.tex_coord.x - input.tex_coord.y;
+    if (tmp * tmp > 4.0 * input.tex_coord.x) discard;
+    return float4(ccc, 1.0);
 }
 
 [shader("fragment")]

@@ -18,8 +18,9 @@ font: *Font,
 cb_ctx: *CallbackContext,
 vk_ctx: VulkanContext,
 general_pipeline_layout: vk.PipelineLayout,
-curve_pipeline: vk.Pipeline,
-solid_pipeline: vk.Pipeline,
+concave_pipeline: vk.Pipeline = null,
+convex_pipeline: vk.Pipeline = null,
+solid_pipeline: vk.Pipeline = null,
 view_transform: ViewTransform,
 transform_changed: bool = false,
 glyph_objects: std.AutoArrayHashMapUnmanaged(u32, GlyphMapValue) = .empty,
@@ -98,20 +99,16 @@ pub fn init(font: *Font, cb_ctx: *CallbackContext, window_size: vk.Extent2D, win
 
     const pipeline_layout = try vk_ctx.createPipelineLayout(Transform);
     errdefer vk.destroyPipelineLayout(vk_ctx.device, pipeline_layout, null);
-    const curve_pipeline = try vk_ctx.createGraphicsPipeline(&shader.slang, shader.entries.vertMain, shader.entries.curveMain, pipeline_layout);
-    errdefer vk.destroyPipeline(vk_ctx.device, curve_pipeline, null);
-    const solid_pipeline = try vk_ctx.createGraphicsPipeline(&shader.slang, shader.entries.vertMain, shader.entries.solidMain, pipeline_layout);
-    errdefer vk.destroyPipeline(vk_ctx.device, solid_pipeline, null);
-
-    return .{
+    var self: Appli = .{
         .font = font,
         .cb_ctx = cb_ctx,
         .vk_ctx = vk_ctx,
         .general_pipeline_layout = pipeline_layout,
-        .curve_pipeline = curve_pipeline,
-        .solid_pipeline = solid_pipeline,
         .view_transform = .init(font.information.units_per_em, vk_ctx.surface_info.extent),
     };
+
+    try self.createGraphicsPipeline();
+    return self;
 }
 
 pub fn deinit(self: *Appli) void {
@@ -123,35 +120,35 @@ pub fn deinit(self: *Appli) void {
     }
     self.glyph_objects.deinit(helpers.allocator);
 
-    vk.destroyPipeline(self.vk_ctx.device, self.solid_pipeline, null);
-    vk.destroyPipeline(self.vk_ctx.device, self.curve_pipeline, null);
+    self.destroyGraphicsPipeline();
     vk.destroyPipelineLayout(self.vk_ctx.device, self.general_pipeline_layout, null);
     self.vk_ctx.deinit();
     glfw.terminate();
 }
 
 pub fn mainLoop(self: *Appli) !void {
-    try self.vk_ctx.startMainLoop(renderingFunc, @ptrCast(self));
+    try self.vk_ctx.startMainLoop(self);
 }
 
 
-pub fn renderingFunc(data: ?*anyopaque, command_buffer: vk.CommandBuffer) !void {
-    const self: *Appli = @ptrCast(@alignCast(data.?));
+pub fn renderingFn(self: *Appli, command_buffer: vk.CommandBuffer) !void {
     self.frame_count +%= 1;
 
     self.applyAspectRatio();
     self.zoom();
     self.drag();
     if (self.transform_changed) {
-        self.updateTotalTransforms();
         self.transform_changed = false;
+        self.updateTotalTransforms();
     }
+    //helpers.timer.report("transform_changed");
 
     var index: usize = 0;
-    vk.cmdBindPipeline(command_buffer, vk.pipeline_bind_point_graphics, self.curve_pipeline);
+    vk.cmdBindPipeline(command_buffer, vk.pipeline_bind_point_graphics, self.concave_pipeline);
     self.vk_ctx.setGraphicsPipelineDynamicStuff(command_buffer);
     for (self.glyph_objects.values()) |v| {
-        if (v.glyph_object.curve_count == 0) continue;
+        const range = v.glyph_object.concave;
+        if (range.len == 0) continue;
         vk.cmdBindVertexBuffers(command_buffer, 0, 1, &v.glyph_object.vertex_buffer, &@as(u64, 0));
         vk.cmdBindIndexBuffer(command_buffer, v.glyph_object.index_buffer, 0, vk.index_type_uint16);
         for (v.transforms.items) |_| {
@@ -159,7 +156,24 @@ pub fn renderingFunc(data: ?*anyopaque, command_buffer: vk.CommandBuffer) !void 
             index += 1;
 
             vk.cmdPushConstants(command_buffer, self.general_pipeline_layout, vk.shader_stage_vertex_bit, 0, @sizeOf(Transform), total_transform);
-            vk.cmdDrawIndexed(command_buffer, v.glyph_object.curve_count, 1, 0, 0, 0);
+            vk.cmdDrawIndexed(command_buffer, range.len, 1, range.start, 0, 0);
+        }
+    }
+
+    index = 0;
+    vk.cmdBindPipeline(command_buffer, vk.pipeline_bind_point_graphics, self.convex_pipeline);
+    self.vk_ctx.setGraphicsPipelineDynamicStuff(command_buffer);
+    for (self.glyph_objects.values()) |v| {
+        const range = v.glyph_object.convex;
+        if (range.len == 0) continue;
+        vk.cmdBindVertexBuffers(command_buffer, 0, 1, &v.glyph_object.vertex_buffer, &@as(u64, 0));
+        vk.cmdBindIndexBuffer(command_buffer, v.glyph_object.index_buffer, 0, vk.index_type_uint16);
+        for (v.transforms.items) |_| {
+            const total_transform = &self.total_transforms.items[index];
+            index += 1;
+
+            vk.cmdPushConstants(command_buffer, self.general_pipeline_layout, vk.shader_stage_vertex_bit, 0, @sizeOf(Transform), total_transform);
+            vk.cmdDrawIndexed(command_buffer, range.len, 1, range.start, 0, 0);
         }
     }
 
@@ -167,7 +181,8 @@ pub fn renderingFunc(data: ?*anyopaque, command_buffer: vk.CommandBuffer) !void 
     vk.cmdBindPipeline(command_buffer, vk.pipeline_bind_point_graphics, self.solid_pipeline);
     self.vk_ctx.setGraphicsPipelineDynamicStuff(command_buffer);
     for (self.glyph_objects.values()) |v| {
-        if (v.glyph_object.solid_count == 0) continue;
+        const range = v.glyph_object.solid;
+        if (range.len == 0) continue;
         vk.cmdBindVertexBuffers(command_buffer, 0, 1, &v.glyph_object.vertex_buffer, &@as(u64, 0));
         vk.cmdBindIndexBuffer(command_buffer, v.glyph_object.index_buffer, 0, vk.index_type_uint16);
         for (v.transforms.items) |_| {
@@ -175,17 +190,24 @@ pub fn renderingFunc(data: ?*anyopaque, command_buffer: vk.CommandBuffer) !void 
             index += 1;
 
             vk.cmdPushConstants(command_buffer, self.general_pipeline_layout, vk.shader_stage_vertex_bit, 0, @sizeOf(Transform), total_transform);
-            vk.cmdDrawIndexed(command_buffer, v.glyph_object.solid_count, 1, v.glyph_object.curve_count, 0, 0);
+            vk.cmdDrawIndexed(command_buffer, range.len, 1, range.start, 0, 0);
         }
     }
+    //helpers.timer.report("cmdDrawIndexed");
 }
 
 pub const GlyphObject = struct {
     memory: vk.DeviceMemory,
     vertex_buffer: vk.Buffer,
     index_buffer: vk.Buffer,
-    curve_count: u32,
-    solid_count: u32,
+    concave: IndicesRange,
+    convex: IndicesRange,
+    solid: IndicesRange,
+
+    const IndicesRange = struct {
+        start: u32,
+        len: u32,
+    };
 
     pub fn init(ctx: VulkanContext, glyph: TriangulatedGlyph) !GlyphObject {
         const sizes: [2]u64 = .{
@@ -236,8 +258,18 @@ pub const GlyphObject = struct {
             .memory = mem,
             .vertex_buffer = bufs[0],
             .index_buffer = bufs[1],
-            .curve_count = 3 * @as(u32, glyph.curve_count),
-            .solid_count = @intCast(3 * (glyph.indices.items.len - glyph.curve_count)),
+            .concave = .{
+                .start = 0,
+                .len = 3 * @as(u32, glyph.concave_count),
+            },
+            .convex = .{
+                .start = 3 * @as(u32, glyph.concave_count),
+                .len = 3 * @as(u32, glyph.convex_count),
+            },
+            .solid = .{
+                .start = 3 * @as(u32, glyph.concave_count + glyph.convex_count),
+                .len = 3 * @as(u32, glyph.solid_count),
+            }
         };
     }
 
@@ -255,7 +287,8 @@ const shader = struct {
 
     const entries = struct {
         const vertMain = "vertMain";
-        const curveMain = "curveMain";
+        const concaveMain = "concaveMain";
+        const convexMain = "convexMain";
         const solidMain = "solidMain";
     };
 };
@@ -342,4 +375,28 @@ fn drag(self: *Appli) void {
         }
     }
     self.prev_cursor_pos = curr_pos;
+}
+
+
+fn createGraphicsPipeline(self: *Appli) !void {
+    self.concave_pipeline = try self.vk_ctx.createGraphicsPipeline(&shader.slang, shader.entries.vertMain, shader.entries.concaveMain, self.general_pipeline_layout);
+    errdefer vk.destroyPipeline(self.vk_ctx.device, self.concave_pipeline, null);
+    self.convex_pipeline = try self.vk_ctx.createGraphicsPipeline(&shader.slang, shader.entries.vertMain, shader.entries.convexMain, self.general_pipeline_layout);
+    errdefer vk.destroyPipeline(self.vk_ctx.device, self.convex_pipeline, null);
+    self.solid_pipeline = try self.vk_ctx.createGraphicsPipeline(&shader.slang, shader.entries.vertMain, shader.entries.solidMain, self.general_pipeline_layout);
+    errdefer vk.destroyPipeline(self.vk_ctx.device, self.solid_pipeline, null);
+}
+
+fn destroyGraphicsPipeline(self: *Appli) void {
+    vk.destroyPipeline(self.vk_ctx.device, self.concave_pipeline, null);
+    self.concave_pipeline = null;
+    vk.destroyPipeline(self.vk_ctx.device, self.convex_pipeline, null);
+    self.convex_pipeline = null;
+    vk.destroyPipeline(self.vk_ctx.device, self.solid_pipeline, null);
+    self.solid_pipeline = null;
+}
+
+pub fn recreateGraphicsPipeline(self: *Appli) !void {
+    self.destroyGraphicsPipeline();
+    try self.createGraphicsPipeline();
 }

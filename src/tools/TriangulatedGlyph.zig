@@ -13,7 +13,9 @@ const Triangulation = geometry.Triangulation;
 
 vertices: []Vertex,
 indices: std.ArrayList([3]u16),
-curve_count: u16,
+concave_count: u16,
+convex_count: u16,
+solid_count: u16,
 
 
 pub const Vertex = extern struct {
@@ -56,11 +58,12 @@ pub fn init(glyph: Glyph) TriangulatedGlyph {
     var indices: std.ArrayList([3]u16) = .empty;
     errdefer indices.deinit(helpers.allocator);
     ensureAlloc(indices.ensureUnusedCapacity(helpers.allocator, curve_count));
-    curve_count = 0;
 
     var triangulation: Triangulation = .init(vertices);
     defer triangulation.deinit();
 
+    var concave_count: u16 = 0;
+    var convex_count: u16 = 0;
     var vertex_idx: u16 = 0;
     for (glyph.contours) |contour| {
         const count = contour.points.len / 2;
@@ -69,20 +72,25 @@ pub fn init(glyph: Glyph) TriangulatedGlyph {
             const p1 = contour.points[2 * curve_idx + 1].to(i32);
             const p2 = contour.points[2 * curve_idx + 2].to(i32);
 
-            var is_concave: bool = false;
             switch (std.math.order((p1.x - p0.x) * (p2.y - p0.y), (p1.y - p0.y) * (p2.x - p0.x))) {
                 .lt => { // clockwise curve, normally it means this curve is convex
-                    indices.appendAssumeCapacity(.{vertex_idx + 0, vertex_idx + 2, vertex_idx + 1});
-                    curve_count += 1;
+                    {
+                        indices.items.len += 1;
+                        indices.items[indices.items.len - 1] = .{vertex_idx + 0, vertex_idx + 2, vertex_idx + 1};
+                    }
+                    convex_count += 1;
                     triangulation.addEdge(.{vertex_idx + 0, vertex_idx + 2});
                 },
                 .eq => { // stright line
                     triangulation.addEdge(.{vertex_idx + 0, vertex_idx + 2});
                 },
                 .gt => { // conter-clockwise, normally it means this curve is concave
-                    is_concave = true;
-                    indices.appendAssumeCapacity(.{vertex_idx + 0, vertex_idx + 1, vertex_idx + 2});
-                    curve_count += 1;
+                    {
+                        indices.items.len += 1;
+                        indices.items[indices.items.len - 1] = indices.items[concave_count];
+                        indices.items[concave_count] = .{vertex_idx + 0, vertex_idx + 1, vertex_idx + 2};
+                    }
+                    concave_count += 1;
                     triangulation.addEdge(.{vertex_idx + 0, vertex_idx + 1});
                     triangulation.addEdge(.{vertex_idx + 1, vertex_idx + 2});
                 },
@@ -95,7 +103,7 @@ pub fn init(glyph: Glyph) TriangulatedGlyph {
             };
             vertices[vertex_idx + 1] = .{
                 .position = contour.points[2 * curve_idx + 1],
-                .tex_coord = .{ .x = @intFromBool(is_concave), .y = @intFromBool(is_concave) },
+                .tex_coord = .{ .x = 0, .y = 0 },
             };
             vertex_idx += 2;
         }
@@ -115,7 +123,9 @@ pub fn init(glyph: Glyph) TriangulatedGlyph {
     return .{
         .vertices = vertices,
         .indices = indices,
-        .curve_count = curve_count,
+        .concave_count = concave_count,
+        .convex_count = convex_count,
+        .solid_count = @intCast(indices.items.len - (concave_count + convex_count)),
     };
 }
 
@@ -124,4 +134,3 @@ pub fn deinit(self: *TriangulatedGlyph) void {
     self.vertices = undefined;
     self.indices.deinit(helpers.allocator);
 }
-

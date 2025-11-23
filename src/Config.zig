@@ -141,7 +141,7 @@ pub const Builder = struct {
 
     pub fn loadCmdLineArgs(self: *Builder) !void {
         var arg_iter = ensureAlloc(std.process.argsWithAllocator(helpers.allocator));
-        arg_iter.deinit();
+        defer arg_iter.deinit();
         _ = arg_iter.next(); // this program path
 
         // command line args should not contain duplicate flags
@@ -203,4 +203,3 @@ pub const Builder = struct {
         if (!all_ok) return error.@"Failed to load command line arguments";
     }
 };
-

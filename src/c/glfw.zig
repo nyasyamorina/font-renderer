@@ -10,13 +10,31 @@ pub const pointing_hand_cursor = c.GLFW_POINTING_HAND_CURSOR;
 pub const arrow_cursor = c.GLFW_ARROW_CURSOR;
 pub const @"false" = c.GLFW_FALSE;
 pub const @"true" = c.GLFW_TRUE;
-pub const press = c.GLFW_PRESS;
-pub const release = c.GLFW_RELEASE;
-pub const repeat = c.GLFW_REPEAT;
 
-pub const mouse_botton = struct {
-    pub const left = c.GLFW_MOUSE_BUTTON_LEFT;
-    pub const right = c.GLFW_MOUSE_BUTTON_RIGHT;
+pub const MouseBotton = enum(c_int) {
+    left = c.GLFW_MOUSE_BUTTON_LEFT,
+    right = c.GLFW_MOUSE_BUTTON_RIGHT,
+    _,
+};
+pub const Action = enum(c_int) {
+    press = c.GLFW_PRESS,
+    release = c.GLFW_RELEASE,
+    repeat = c.GLFW_REPEAT,
+    _,
+};
+pub const Key = enum(c_int) {
+    escape = c.GLFW_KEY_ESCAPE,
+    m = c.GLFW_KEY_M,
+    _,
+};
+pub const Mods = packed struct(c_int) {
+    shift: bool,
+    control: bool,
+    alt: bool,
+    super: bool,
+    caps_lock: bool,
+    num_lock: bool,
+    _pad: u26,
 };
 
 pub const Window = c.GLFWwindow;
@@ -27,6 +45,7 @@ pub const windowHint = c.glfwWindowHint;
 pub const createWindow = c.glfwCreateWindow;
 pub const createStandardCursor = c.glfwCreateStandardCursor;
 pub const windowShouldClose = c.glfwWindowShouldClose;
+pub const setWindowShouldClose = c.glfwSetWindowShouldClose;
 pub const pollEvents = c.glfwPollEvents;
 pub const destroyWindow = c.glfwDestroyWindow;
 pub const destroyCursor = c.glfwDestroyCursor;
