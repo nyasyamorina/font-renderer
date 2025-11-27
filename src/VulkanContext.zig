@@ -112,17 +112,18 @@ pub fn startMainLoop(self: *VulkanContext, appli: *Appli) !void {
             self.cb_ctx.change_msaa = false;
             _ = vk.deviceWaitIdle(self.device);
             if (self.msaaRenderingEnabled()) {
-                log.debug("desabling msaa", .{});
                 self.disableMsaaRendering();
             } else if (self.msaa_sample_count == vk.sample_count_1_bit) {
                 log.warn("anisotropy sampling is not available on this device, msaa disabled", .{});
                 break :blk;
             } else {
-                log.debug("enabling msaa", .{});
-                errdefer self.disableMsaaRendering();
-                try self.enableMsaaRendering();
+                self.enableMsaaRendering() catch |err| {
+                    log.err("failed to enabling msaa: {t}", .{err});
+                    self.disableMsaaRendering();
+                    break :blk;
+                };
             }
-            try appli.recreateGraphicsPipeline();
+            try appli.recreateGraphicsPipelines();
             //helpers.timer.report("change_msaa");
         }
 
@@ -275,6 +276,7 @@ pub fn msaaRenderingEnabled(self: VulkanContext) bool {
 
 pub fn enableMsaaRendering(self: *VulkanContext) !void {
     std.debug.assert(!self.msaaRenderingEnabled());
+    log.debug("enabling msaa", .{});
     errdefer self.destroyMsaaStuff();
 
     const info: Image2DInfo = .{
@@ -320,7 +322,7 @@ pub fn enableMsaaRendering(self: *VulkanContext) !void {
 }
 
 pub fn disableMsaaRendering(self: *VulkanContext) void {
-    std.debug.assert(self.msaaRenderingEnabled());
+    log.debug("disabling msaa", .{});
     self.destroyMsaaStuff();
     self.color_attachment_info.resolveImageView = null;
     self.color_attachment_info.resolveMode = 0;
@@ -354,6 +356,7 @@ fn createWindow(self: *VulkanContext, window_size: vk.Extent2D, window_title: [*
     _ = glfw.setScrollCallback(self.window, &CallbackContext.scrollCallback);
     _ = glfw.setMouseButtonCallback(self.window, &CallbackContext.mouseButtonCallback);
     _ = glfw.setKeyCallback(self.window, &CallbackContext.keyCallback);
+    _ = glfw.setCharCallback(self.window, &CallbackContext.charCallback);
 }
 
 
@@ -1159,7 +1162,7 @@ pub fn createPipelineLayout(self: VulkanContext, comptime PushVertexConstantObje
     return pipeline_layout;
 }
 
-pub fn createGraphicsPipeline(self: VulkanContext, shader_code: []align(4) const u8, vert_entry: [*:0]const u8, frag_entry: [*:0]const u8, pipeline_layout: vk.PipelineLayout) !vk.Pipeline {
+pub fn createGraphicsPipeline(self: VulkanContext, pipeline_cache: vk.PipelineCache, shader_code: []align(4) const u8, vert_entry: [*:0]const u8, frag_entry: [*:0]const u8, pipeline_layout: vk.PipelineLayout) !vk.Pipeline {
     const shader_module = try self.createShaderModule(shader_code);
     defer vk.destroyShaderModule(self.device, shader_module, null);
 
@@ -1278,7 +1281,7 @@ pub fn createGraphicsPipeline(self: VulkanContext, shader_code: []align(4) const
     };
 
     var pipeline: vk.Pipeline = null;
-    try ensureVkSuccess("vkCreateGraphicsPipelines", vk.createGraphicsPipelines(self.device, null, 1, &pipeline_info, null, &pipeline));
+    try ensureVkSuccess("vkCreateGraphicsPipelines", vk.createGraphicsPipelines(self.device, pipeline_cache, 1, &pipeline_info, null, &pipeline));
     return pipeline;
 }
 

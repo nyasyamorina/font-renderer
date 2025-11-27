@@ -10,6 +10,7 @@ const fields = @typeInfo(Config).@"struct".fields;
 
 font_file: Option([]const u8, "font_file", 'f'),
 text: Option(?[]const u8, "text", 't'),
+enable_cache: Option(?bool, "cache", 'c'),
 
 
 pub const OptionType = enum {
@@ -53,6 +54,7 @@ pub fn Option(comptime T: type, comptime _long_name: []const u8, comptime _short
         }
 
         pub fn deinit(self: *@This(), allocator: std.mem.Allocator) void {
+            if (option_type != .string) return;
             if (@This().is_optional) {
                 if (self.value) |v| {
                     allocator.free(v);

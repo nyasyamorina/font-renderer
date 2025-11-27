@@ -24,6 +24,7 @@ pub const Action = enum(c_int) {
 };
 pub const Key = enum(c_int) {
     escape = c.GLFW_KEY_ESCAPE,
+    backspace = c.GLFW_KEY_BACKSPACE,
     m = c.GLFW_KEY_M,
     _,
 };
@@ -61,5 +62,6 @@ pub const setFramebufferSizeCallback = c.glfwSetFramebufferSizeCallback;
 pub const setKeyCallback = c.glfwSetKeyCallback;
 pub const setMouseButtonCallback = c.glfwSetMouseButtonCallback;
 pub const setScrollCallback = c.glfwSetScrollCallback;
+pub const setCharCallback = c.glfwSetCharCallback;
 pub const getWindowUserPointer = c.glfwGetWindowUserPointer;
 pub const waitEvents = c.glfwWaitEvents;

@@ -2,6 +2,7 @@ const std = @import("std");
 
 const Appli = @This();
 const CallbackContext = @import("CallbackContext.zig");
+const CacheManager = @import("CacheManager.zig");
 const helpers = @import("helpers.zig");
 const Font = @import("font/Font.zig");
 const Point = @import("tools/geometry.zig").Point;
@@ -17,6 +18,7 @@ const ensureVkSuccess = helpers.ensureVkSuccess;
 font: *Font,
 cb_ctx: *CallbackContext,
 vk_ctx: VulkanContext,
+cc_mng: CacheManager,
 general_pipeline_layout: vk.PipelineLayout,
 concave_pipeline: vk.Pipeline = null,
 convex_pipeline: vk.Pipeline = null,
@@ -50,7 +52,7 @@ const ViewTransform = struct {
         return .{
             .global = .{
                 .scale = .{scale, scale},
-                .offset = .{0, 0},
+                .offset = .{-0.25, -0.25},
             },
             .aspect_ratio = width / height,
         };
@@ -90,24 +92,27 @@ const GlyphMapValue = struct {
     transforms: std.ArrayList(Transform) = .empty,
 };
 
-pub fn init(font: *Font, cb_ctx: *CallbackContext, window_size: vk.Extent2D, window_title: [*:0]const u8) !Appli {
+pub fn init(font: *Font, cb_ctx: *CallbackContext, window_size: vk.Extent2D, window_title: [*:0]const u8, enable_cache: bool) !Appli {
     if (glfw.init() != glfw.@"true") return error.@"failed to initialize glfw";
     errdefer glfw.terminate();
 
     var vk_ctx: VulkanContext = try .init(cb_ctx, window_size, window_title);
     errdefer vk_ctx.deinit();
+    var cc_mng: CacheManager = try .init(enable_cache);
+    errdefer cc_mng.deinit(vk_ctx.device);
 
     const pipeline_layout = try vk_ctx.createPipelineLayout(Transform);
     errdefer vk.destroyPipelineLayout(vk_ctx.device, pipeline_layout, null);
     var self: Appli = .{
         .font = font,
         .cb_ctx = cb_ctx,
+        .cc_mng = cc_mng,
         .vk_ctx = vk_ctx,
         .general_pipeline_layout = pipeline_layout,
         .view_transform = .init(font.information.units_per_em, vk_ctx.surface_info.extent),
     };
 
-    try self.createGraphicsPipeline();
+    try self.createGraphicsPipelines();
     return self;
 }
 
@@ -120,8 +125,10 @@ pub fn deinit(self: *Appli) void {
     }
     self.glyph_objects.deinit(helpers.allocator);
 
-    self.destroyGraphicsPipeline();
+    self.destroyGraphicsPipelines();
     vk.destroyPipelineLayout(self.vk_ctx.device, self.general_pipeline_layout, null);
+
+    self.cc_mng.deinit(self.vk_ctx.device);
     self.vk_ctx.deinit();
     glfw.terminate();
 }
@@ -294,7 +301,7 @@ const shader = struct {
 };
 
 
-pub fn setChar(self: *Appli, char: u32) !void {
+pub fn addChar(self: *Appli, char: u32) !void {
     const entry = try (self.glyph_objects.getOrPut(helpers.allocator, char));
 
     if (!entry.found_existing) {
@@ -378,16 +385,24 @@ fn drag(self: *Appli) void {
 }
 
 
-fn createGraphicsPipeline(self: *Appli) !void {
-    self.concave_pipeline = try self.vk_ctx.createGraphicsPipeline(&shader.slang, shader.entries.vertMain, shader.entries.concaveMain, self.general_pipeline_layout);
+fn createGraphicsPipelines(self: *Appli) !void {
+    const concave_cache = self.cc_mng.getPipelineCache(self.vk_ctx.device, .concave);
+    self.concave_pipeline = try self.vk_ctx.createGraphicsPipeline(concave_cache, &shader.slang, shader.entries.vertMain, shader.entries.concaveMain, self.general_pipeline_layout);
     errdefer vk.destroyPipeline(self.vk_ctx.device, self.concave_pipeline, null);
-    self.convex_pipeline = try self.vk_ctx.createGraphicsPipeline(&shader.slang, shader.entries.vertMain, shader.entries.convexMain, self.general_pipeline_layout);
+    self.cc_mng.updatePipelineCache(self.vk_ctx.device, .concave);
+
+    const convex_cache = self.cc_mng.getPipelineCache(self.vk_ctx.device, .convex);
+    self.convex_pipeline = try self.vk_ctx.createGraphicsPipeline(convex_cache, &shader.slang, shader.entries.vertMain, shader.entries.convexMain, self.general_pipeline_layout);
     errdefer vk.destroyPipeline(self.vk_ctx.device, self.convex_pipeline, null);
-    self.solid_pipeline = try self.vk_ctx.createGraphicsPipeline(&shader.slang, shader.entries.vertMain, shader.entries.solidMain, self.general_pipeline_layout);
+    self.cc_mng.updatePipelineCache(self.vk_ctx.device, .convex);
+
+    const solid_cache = self.cc_mng.getPipelineCache(self.vk_ctx.device, .solid);
+    self.solid_pipeline = try self.vk_ctx.createGraphicsPipeline(solid_cache, &shader.slang, shader.entries.vertMain, shader.entries.solidMain, self.general_pipeline_layout);
     errdefer vk.destroyPipeline(self.vk_ctx.device, self.solid_pipeline, null);
+    self.cc_mng.updatePipelineCache(self.vk_ctx.device, .solid);
 }
 
-fn destroyGraphicsPipeline(self: *Appli) void {
+fn destroyGraphicsPipelines(self: *Appli) void {
     vk.destroyPipeline(self.vk_ctx.device, self.concave_pipeline, null);
     self.concave_pipeline = null;
     vk.destroyPipeline(self.vk_ctx.device, self.convex_pipeline, null);
@@ -396,7 +411,7 @@ fn destroyGraphicsPipeline(self: *Appli) void {
     self.solid_pipeline = null;
 }
 
-pub fn recreateGraphicsPipeline(self: *Appli) !void {
-    self.destroyGraphicsPipeline();
-    try self.createGraphicsPipeline();
+pub fn recreateGraphicsPipelines(self: *Appli) !void {
+    self.destroyGraphicsPipelines();
+    try self.createGraphicsPipelines();
 }

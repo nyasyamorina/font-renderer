@@ -253,6 +253,7 @@ pub fn vkSType(comptime T: type) vk.StructureType {
         vk.PhysicalDeviceVulkan11Features => vk.structure_type_physical_device_vulkan_1_1_features,
         vk.PhysicalDeviceVulkan12Features => vk.structure_type_physical_device_vulkan_1_2_features,
         vk.PhysicalDeviceVulkan13Features => vk.structure_type_physical_device_vulkan_1_3_features,
+        vk.PipelineCacheCreateInfo => vk.structure_type_pipeline_cache_create_info,
         vk.PipelineColorBlendStateCreateInfo => vk.structure_type_pipeline_color_blend_state_create_info,
         vk.PipelineDepthStencilStateCreateInfo => vk.structure_type_pipeline_depth_ctensil_state_create_info,
         vk.PipelineDynamicStateCreateInfo => vk.structure_type_pipeline_dynamic_state_create_info,
