@@ -77,3 +77,5 @@ Rendering glyph based on triangulation.
 - fix wrong glyph triangulation (concave and convex triangles intersection, or even concave triangle (on the inner contour) stick out beyond the outer contour)
 
 - right to left font
+
+- handle instruction set in glyph data
