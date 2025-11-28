@@ -4,7 +4,6 @@ const Config = @This();
 const helpers = @import("helpers.zig");
 const log = std.log.scoped(.Config);
 
-const ensureAlloc = helpers.ensureAlloc;
 const fields = @typeInfo(Config).@"struct".fields;
 
 
@@ -142,7 +141,7 @@ pub const Builder = struct {
     }
 
     pub fn loadCmdLineArgs(self: *Builder) !void {
-        var arg_iter = ensureAlloc(std.process.argsWithAllocator(helpers.allocator));
+        var arg_iter = helpers.ensureAlloc(std.process.argsWithAllocator(helpers.allocator));
         defer arg_iter.deinit();
         _ = arg_iter.next(); // this program path
 
@@ -183,7 +182,7 @@ pub const Builder = struct {
                                 continue :next_arg;
                             },
                             .string => str: {
-                                const string = ensureAlloc(helpers.allocator.dupe(u8, value_str));
+                                const string = helpers.ensureAlloc(helpers.allocator.dupe(u8, value_str));
                                 free_flag.* = true;
                                 break :str string;
                             },

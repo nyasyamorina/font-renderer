@@ -11,7 +11,6 @@ const glfw = @import("c/glfw.zig");
 const vk = @import("c/vk.zig");
 const VulkanContext = @import("VulkanContext.zig");
 
-const ensureAlloc = helpers.ensureAlloc;
 const ensureVkSuccess = helpers.ensureVkSuccess;
 
 
@@ -31,6 +30,7 @@ frame_count: usize = 0,
 cursor_pos: Point(f32) = .{ .x = 0, .y = 0 },
 cursor_pos_last_update_frame: usize = 0,
 prev_cursor_pos: ?Point(f32) = null,
+curr_em_pos: f32 = 0,
 
 
 const Transform = extern struct {
@@ -89,6 +89,7 @@ const ViewTransform = struct {
 const GlyphMapValue = struct {
     glyph_object: GlyphObject,
     box: Font.Glyph.Box,
+    advance_width: i16,
     transforms: std.ArrayList(Transform) = .empty,
 };
 
@@ -155,7 +156,10 @@ pub fn renderingFn(self: *Appli, command_buffer: vk.CommandBuffer) !void {
     self.vk_ctx.setGraphicsPipelineDynamicStuff(command_buffer);
     for (self.glyph_objects.values()) |v| {
         const range = v.glyph_object.concave;
-        if (range.len == 0) continue;
+        if (range.len == 0) {
+            index += v.transforms.items.len;
+            continue;
+        }
         vk.cmdBindVertexBuffers(command_buffer, 0, 1, &v.glyph_object.vertex_buffer, &@as(u64, 0));
         vk.cmdBindIndexBuffer(command_buffer, v.glyph_object.index_buffer, 0, vk.index_type_uint16);
         for (v.transforms.items) |_| {
@@ -172,7 +176,10 @@ pub fn renderingFn(self: *Appli, command_buffer: vk.CommandBuffer) !void {
     self.vk_ctx.setGraphicsPipelineDynamicStuff(command_buffer);
     for (self.glyph_objects.values()) |v| {
         const range = v.glyph_object.convex;
-        if (range.len == 0) continue;
+        if (range.len == 0) {
+            index += v.transforms.items.len;
+            continue;
+        }
         vk.cmdBindVertexBuffers(command_buffer, 0, 1, &v.glyph_object.vertex_buffer, &@as(u64, 0));
         vk.cmdBindIndexBuffer(command_buffer, v.glyph_object.index_buffer, 0, vk.index_type_uint16);
         for (v.transforms.items) |_| {
@@ -189,7 +196,10 @@ pub fn renderingFn(self: *Appli, command_buffer: vk.CommandBuffer) !void {
     self.vk_ctx.setGraphicsPipelineDynamicStuff(command_buffer);
     for (self.glyph_objects.values()) |v| {
         const range = v.glyph_object.solid;
-        if (range.len == 0) continue;
+        if (range.len == 0) {
+            index += v.transforms.items.len;
+            continue;
+        }
         vk.cmdBindVertexBuffers(command_buffer, 0, 1, &v.glyph_object.vertex_buffer, &@as(u64, 0));
         vk.cmdBindIndexBuffer(command_buffer, v.glyph_object.index_buffer, 0, vk.index_type_uint16);
         for (v.transforms.items) |_| {
@@ -306,25 +316,34 @@ pub fn addChar(self: *Appli, char: u32) !void {
 
     if (!entry.found_existing) {
         const glyph = try self.font.getGlyph(char);
-        var triangle_glyph: TriangulatedGlyph = .init(glyph);
+        var triangle_glyph: TriangulatedGlyph = .init(glyph.@"0");
         defer triangle_glyph.deinit();
 
         var glyph_object: GlyphObject = try .init(self.vk_ctx, triangle_glyph);
         errdefer glyph_object.deinit(self.vk_ctx.device);
 
-        entry.value_ptr.* = .{ .glyph_object = glyph_object, .box = glyph.box };
+        entry.value_ptr.* = .{
+            .glyph_object = glyph_object,
+            .box = glyph.@"0".box,
+            .advance_width = glyph.@"1",
+        };
     }
 
-    const transform = self.getTransform(entry.value_ptr.box);
+    const transform = self.getTransform(char);
     helpers.ensureAlloc(entry.value_ptr.transforms.append(helpers.allocator, transform));
     helpers.ensureAlloc(self.total_transforms.ensureUnusedCapacity(helpers.allocator, 1));
     self.total_transforms.items.len += 1;
     self.transform_changed = true;
 }
 
-fn getTransform(self: *Appli, box: Font.Glyph.Box) Transform {
-    _ = self; _ = box;
-    return .{};
+fn getTransform(self: *Appli, char: u32) Transform {
+    const curr_em_pos = self.curr_em_pos;
+    const transform: Transform = .{ .offset = .{curr_em_pos, 0} };
+
+    const value = self.glyph_objects.get(char).?;
+    self.curr_em_pos += @floatFromInt(value.advance_width);
+
+    return transform;
 }
 
 fn updateTotalTransforms(self: *Appli) void {

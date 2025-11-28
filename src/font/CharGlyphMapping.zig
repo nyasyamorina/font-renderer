@@ -3,7 +3,6 @@ const std = @import("std");
 const helpers = @import("../helpers.zig");
 
 const CharGlyphMapping = @This();
-const ensureAlloc = helpers.ensureAlloc;
 
 
 branches: []Branch,
@@ -94,7 +93,7 @@ pub fn getGlyph(self: CharGlyphMapping, char: u32) u16 {
 }
 
 fn buildBraches(mappings: []const RangeMapping) []Branch {
-    const branches = ensureAlloc(helpers.allocator.alloc(Branch, @max(1, mappings.len - 1)));
+    const branches = helpers.alloc(Branch, @max(1, mappings.len - 1));
     if (mappings.len == 1) {
         branches[0] = .{
             .start_char = mappings[0].end_char - mappings[0].char_count,
@@ -109,7 +108,7 @@ fn buildBraches(mappings: []const RangeMapping) []Branch {
             std.debug.assert(right.end_char - left.end_char >= right.char_count);
         }
     }
-    const branch_ranges = ensureAlloc(helpers.allocator.alloc(struct {u16, u16}, branches.len));
+    const branch_ranges = helpers.alloc(struct {u16, u16}, branches.len);
     defer helpers.allocator.free(branch_ranges);
     branch_ranges[0] = .{0, @intCast(mappings.len)};
 
@@ -176,4 +175,3 @@ fn splitRange(mappings: []const RangeMapping) u16 {
         }
     }
 }
-

@@ -79,13 +79,13 @@ pub const Triangulation = struct {
 
         var runner: Runner = .init;
         defer runner.deinit();
+        for (self.vertex_sorted_indices.items) |index| runner.addVertex(index);
+        for (self.contour_edges.items) |edge| runner.preConnectContourEdge(edge);
 
         var skip_contour_edge_count: u16 = 0;
-        var new_edge_count: u16 = undefined;
         for (self.vertex_sorted_indices.items) |new_index| {
-            new_edge_count = 0;
-            runner.addVertex(new_index);
 
+            var new_edge_count: u16 = 0;
             // connect new point to old points to form new edge
             for (self.contour_edges.items[skip_contour_edge_count ..]) |edge| {
                 if (edge[0] != new_index) break;
@@ -93,7 +93,10 @@ pub const Triangulation = struct {
                 new_edge_count += 1;
             }
             skip_contour_edge_count += new_edge_count;
-            for (runner.vertices.keys()) |index| {
+            var iter = runner.vertices.iterator();
+            while (iter.next()) |entry| {
+                if (entry.value_ptr.@"0" == 0) continue;
+                const index = entry.key_ptr.*;
                 if (self.canConnect(skip_contour_edge_count, runner.edges.keys(), new_index, index)) {
                     runner.connectEdge(.{new_index, index});
                     new_edge_count += 1;
@@ -103,15 +106,18 @@ pub const Triangulation = struct {
             // check new edges with old edges can form new triangle or not
             // note that any new triangle must be formed by 2 new edges and 1 old edge
             if (new_edge_count < 2) continue;
-            const edges = runner.edges.keys();
-            const new_edges_start = edges.len - new_edge_count;
-            const new_edges = edges[new_edges_start ..];
+            const new_edges_start = runner.edges.count() - new_edge_count;
+            const new_edges = runner.edges.keys()[new_edges_start ..];
+            const new_edge_refs = runner.edges.values()[new_edges_start ..];
             for (0 .. new_edges.len - 1) |new_edge1| {
                 for (new_edge1 + 1 .. new_edges.len) |new_edge2| {
+                    if (new_edge_refs[new_edge1] == 0) break;
+                    if (new_edge_refs[new_edge2] == 0) continue;
+
                     const p1 = new_edges[new_edge1][1];
                     const p2 = new_edges[new_edge2][1];
-
                     const old_edge = self.edge_manager.edge(.{p1, p2});
+
                     if (runner.edges.getIndex(old_edge)) |old_edge_idx| {
                         const triangle = self.clockwiseTriangle(.{new_index, p1, p2});
                         helpers.ensureAlloc(output_to.append(helpers.allocator, triangle));
@@ -124,7 +130,7 @@ pub const Triangulation = struct {
     }
 
     const Runner = struct {
-        vertices: std.AutoArrayHashMapUnmanaged(u16, u16) = .empty,
+        vertices: std.AutoArrayHashMapUnmanaged(u16, struct {u16, u16}) = .empty, // vertex index => .{current connected count, not connected concour count}
         edges: std.AutoArrayHashMapUnmanaged([2]u16, u8) = .empty,
         removes: std.ArrayList(usize) = .empty,
 
@@ -136,22 +142,24 @@ pub const Triangulation = struct {
         }
 
         pub fn addVertex(self: *Runner, vertex_index: u16) void {
-            helpers.ensureAlloc(self.vertices.put(helpers.allocator, vertex_index, 0));
+            helpers.ensureAlloc(self.vertices.put(helpers.allocator, vertex_index, .{0, 0}));
         }
 
+        pub fn preConnectContourEdge(self: *Runner, edge: [2]u16) void {
+            self.vertices.getEntry(edge[0]).?.value_ptr.@"1" += 1;
+            self.vertices.getEntry(edge[1]).?.value_ptr.@"1" += 1;
+        }
         pub fn connectContourEdge(self: *Runner, edge: [2]u16) void {
             helpers.ensureAlloc(self.edges.put(helpers.allocator, edge, 1));
-            self.increaseVertexCount(edge);
+            const p0 = self.vertices.getEntry(edge[0]).?.value_ptr;
+            p0.@"0" += 1; p0.@"1" -= 1;
+            const p1 = self.vertices.getEntry(edge[1]).?.value_ptr;
+            p1.@"0" += 1; p1.@"1" -= 1;
         }
         pub fn connectEdge(self: *Runner, edge: [2]u16) void {
             helpers.ensureAlloc(self.edges.put(helpers.allocator, edge, 2));
-            self.increaseVertexCount(edge);
-        }
-        fn increaseVertexCount(self: *Runner, edge: [2]u16) void {
-            const e0 = self.vertices.getEntry(edge[0]).?;
-            e0.value_ptr.* += 1;
-            const e1 = self.vertices.getEntry(edge[1]).?;
-            e1.value_ptr.* += 1;
+            self.vertices.getEntry(edge[0]).?.value_ptr.@"0" += 1;
+            self.vertices.getEntry(edge[1]).?.value_ptr.@"0" += 1;
         }
 
         fn countTriangle(self: *Runner, edge_index1: usize, edge_index2: usize, edge_index3: usize) void {
@@ -171,13 +179,13 @@ pub const Triangulation = struct {
                 const edge = self.edges.keys()[idx];
                 self.edges.swapRemoveAt(idx);
 
-                self.vertices.getEntry(edge[0]).?.value_ptr.* -= 1;
-                self.vertices.getEntry(edge[1]).?.value_ptr.* -= 1;
+                self.vertices.getEntry(edge[0]).?.value_ptr.@"0" -= 1;
+                self.vertices.getEntry(edge[1]).?.value_ptr.@"0" -= 1;
             }
 
             self.removes.clearRetainingCapacity();
             for (self.vertices.values(), 0..) |vertex_count, idx| {
-                if (vertex_count == 0) helpers.ensureAlloc(self.removes.append(helpers.allocator, idx));
+                if (vertex_count.@"0" == 0 and vertex_count.@"1" == 0) helpers.ensureAlloc(self.removes.append(helpers.allocator, idx));
             }
             iter = std.mem.reverseIterator(self.removes.items);
             while (iter.next()) |idx| self.vertices.swapRemoveAt(idx);
@@ -213,7 +221,7 @@ pub const Triangulation = struct {
 
         var included = helpers.alloc(bool, self.vertices.len);
         defer helpers.allocator.free(included);
-        for (included) |*i| i.* = false;
+        @memset(included, false);
         for (self.contour_edges.items) |edge| {
             included[edge[0]] = true;
             included[edge[1]] = true;

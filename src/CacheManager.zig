@@ -100,6 +100,7 @@ fn saveCacheData(self: CacheManager, file_name: []const u8, data: []const u8) vo
     };
     defer cache_file.close();
     cache_file.writeAll(data) catch |err| log.warn("failed to write cache data into \"{s}\", err: {t}", .{cache_path, err});
+    log.debug("saved cache file \"{s}\"", .{cache_path});
 }
 
 

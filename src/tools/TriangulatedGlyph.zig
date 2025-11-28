@@ -6,7 +6,6 @@ const helpers = @import("../helpers.zig");
 const geometry = @import("geometry.zig");
 const TriangulatedGlyph = @This();
 
-const ensureAlloc = helpers.ensureAlloc;
 const Point = geometry.Point;
 const Triangulation = geometry.Triangulation;
 
@@ -57,7 +56,7 @@ pub fn init(glyph: Glyph) TriangulatedGlyph {
     errdefer helpers.allocator.free(vertices);
     var indices: std.ArrayList([3]u16) = .empty;
     errdefer indices.deinit(helpers.allocator);
-    ensureAlloc(indices.ensureUnusedCapacity(helpers.allocator, curve_count));
+    helpers.ensureAlloc(indices.ensureUnusedCapacity(helpers.allocator, curve_count));
 
     var triangulation: Triangulation = .init(vertices);
     defer triangulation.deinit();

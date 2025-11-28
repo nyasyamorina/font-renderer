@@ -40,10 +40,10 @@ pub fn main() !void {
     //defer glyph_debug.rgb.deinit();
     //const qoi_file = try std.fs.cwd().createFile("playground/glyph_debug.qoi", .{});
     //defer qoi_file.close();
-    //const qoi_buf = helpers.ensureAlloc(helpers.allocator.alloc(u8, 4096));
+    //const qoi_buf = helpers.alloc(u8, 4096);
     //defer helpers.allocator.free(qoi_buf);
     //var qoi_writer = qoi_file.writer(qoi_buf);
-    //defer qoi_writer.interface.flush() catch {};
+    //defer qoi_writer.interface.flush() catch {};c
     //try qoi.saveRGB(&qoi_writer.interface, &glyph_debug.rgb.interface);
 
     var callback_ctx: CallbackContext = .{};
@@ -52,7 +52,9 @@ pub fn main() !void {
     defer appli.deinit();
 
     if (config.text.value) |text| {
-        _ = text;
+        const wtf8_view = try std.unicode.Wtf8View.init(text);
+        var iter = wtf8_view.iterator();
+        while (iter.nextCodepoint()) |char| try appli.addChar(char);
     } else {
         try appli.addChar('A');
     }

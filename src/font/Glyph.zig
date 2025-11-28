@@ -7,8 +7,6 @@ const ttf = @import("ttf.zig");
 const Point = @import("../tools/geometry.zig").Point(i16);
 const i18d14 = helpers.FixedPointNumber(i32, 14);
 
-const ensureAlloc = helpers.ensureAlloc;
-
 
 box: Box,
 contours: []Contour,
@@ -54,6 +52,8 @@ pub const Contour = struct {
             const curr_coord = data.coordinates[coord];
 
             if (prev_on_curve == curr_on_curve) {
+                // ! the coord of middle point will round to nearest integer,
+                // this will cause "wrong" rendering effect that difficult to notice
                 empty_point_buf[next_point] = .initMiddle(prev_coord, curr_coord);
                 next_point += 1;
             }
@@ -74,12 +74,9 @@ pub const Contour = struct {
     }
 };
 
-pub fn initEmpty(description: ttf.GlyphDescription) Glyph {
+pub fn initEmpty() Glyph {
     return .{
-        .box = .{
-            .x_min = description.x_min, .y_min = description.y_min,
-            .x_max = description.x_max, .y_max = description.y_max,
-        },
+        .box = std.mem.zeroes(Box),
         .contours = &.{},
     };
 }
@@ -87,9 +84,9 @@ pub fn initEmpty(description: ttf.GlyphDescription) Glyph {
 pub fn initTTFSimple(description: ttf.GlyphDescription, data: ttf.SimpleGlyph) !Glyph {
     if (data.instructions.len > 0) @panic("not impl"); // TODO:
 
-    const contours = ensureAlloc(helpers.allocator.alloc(Contour, data.end_pts_of_contours.len));
+    const contours = helpers.alloc(Contour, data.end_pts_of_contours.len);
     errdefer helpers.allocator.free(contours);
-    const points = ensureAlloc(helpers.allocator.alloc(Point, Contour.countTTFPoints(data)));
+    const points = helpers.alloc(Point, Contour.countTTFPoints(data));
     errdefer helpers.allocator.free(points);
 
     var empty_point_buf = points;
@@ -125,9 +122,9 @@ pub fn initTTFComponent(description: ttf.GlyphDescription, data: ttf.ComponentGl
         break :blk .{c, p};
     };
 
-    const contours = ensureAlloc(helpers.allocator.alloc(Contour, contour_count));
+    const contours = helpers.alloc(Contour, contour_count);
     errdefer helpers.allocator.free(contours);
-    const points = ensureAlloc(helpers.allocator.alloc(Point, point_count));
+    const points = helpers.alloc(Point, point_count);
     errdefer helpers.allocator.free(points);
 
     var next_contour: usize = 0;
@@ -183,4 +180,3 @@ fn transform1(x: i16, y: i16, a_or_b: ttf.i2d14, c_or_d: ttf.i2d14, e_or_f: i16)
     const shift = e_or_f << @intFromBool(@abs(@as(i16, @bitCast(@abs(a_or_b.data) -% @abs(c_or_d.data)))) <= 8);
     return .{ .data = @as(i32, a_or_b.data) * @as(i32, x) + @as(i32, c_or_d.data) * @as(i32, y) + tmp * shift };
 }
-

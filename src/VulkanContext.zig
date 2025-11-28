@@ -23,6 +23,7 @@ debug_messenger: vk.DebugUtilsMessengerEXT = null,
 surface: vk.SurfaceKHR = null,
 physical_device: vk.PhysicalDevice = null,
 msaa_sample_count: vk.SampleCountFlagBits = vk.sample_count_1_bit,
+sample_shading: bool = false,
 color_image: vk.Image = null,
 color_image_view: vk.ImageView = null,
 color_image_memory: vk.DeviceMemory = null,
@@ -538,7 +539,6 @@ pub const device_features = blk: {
 fn pickAndCreateDevice(self: *VulkanContext) !void {
     // select physical device
     var count: u32 = 0;
-    var has_anisotropy = false;
     try ensureVkSuccess("vkEnumeratePhysicalDevices", vk.enumeratePhysicalDevices(self.instance, &count, null));
     switch (count) {
         0 => {
@@ -547,7 +547,7 @@ fn pickAndCreateDevice(self: *VulkanContext) !void {
         },
         1 => {
             try ensureVkSuccess("vkEnumeratePhysicalDevices", vk.enumeratePhysicalDevices(self.instance, &count, &self.physical_device));
-            if (!self.checkPhysicalDeviceSuitabilities(self.physical_device, &has_anisotropy)) {
+            if (!self.checkPhysicalDeviceSuitabilities(self.physical_device)) {
                 var properties: vk.PhysicalDeviceProperties = .{};
                 vk.getPhysicalDeviceProperties(self.physical_device, &properties);
                 log.err("the only vulkan supported device: \"{s}\" is not suitable for this application", .{properties.deviceName});
@@ -561,7 +561,7 @@ fn pickAndCreateDevice(self: *VulkanContext) !void {
             try ensureVkSuccess("vkEnumeratePhysicalDevices", vk.enumeratePhysicalDevices(self.instance, &count, devices.ptr));
 
             for (devices) |device| {
-                if (self.checkPhysicalDeviceSuitabilities(device, &has_anisotropy)) {
+                if (self.checkPhysicalDeviceSuitabilities(device)) {
                     self.physical_device = device;
                     break;
                 } else {
@@ -583,17 +583,6 @@ fn pickAndCreateDevice(self: *VulkanContext) !void {
     errdefer helpers.allocator.free(self.device_memory_types);
     @memcpy(self.device_memory_types, mem_prop.memoryTypes[0 .. mem_prop.memoryTypeCount]);
 
-    // msaa samples
-    if (has_anisotropy) {
-        var properties: vk.PhysicalDeviceProperties = .{};
-        vk.getPhysicalDeviceProperties(self.physical_device, &properties);
-        const msaa_supported = properties.limits.framebufferColorSampleCounts;
-        if (msaa_supported >= 2) {
-            self.msaa_sample_count = @as(vk.SampleCountFlagBits, 1) << std.math.log2_int(vk.SampleCountFlags, msaa_supported);
-            log.debug("maximum msaa sample count: {d}", .{self.msaa_sample_count});
-        }
-    }
-
     // queues
     var unique_queue_families = self.queue_families.uniqueSetAlloc();
     defer unique_queue_families.deinit(helpers.allocator);
@@ -609,6 +598,7 @@ fn pickAndCreateDevice(self: *VulkanContext) !void {
 
     var enabled_features = device_features;
     enabled_features.features.@"2".features.samplerAnisotropy = if (self.msaa_sample_count != vk.sample_count_1_bit) vk.@"true" else vk.false;
+    enabled_features.features.@"2".features.sampleRateShading = if (self.sample_shading) vk.@"true" else vk.@"false";
     const device_info: vk.DeviceCreateInfo = .{
         .sType = vk.structure_type_device_create_info,
         .pNext = @ptrCast(enabled_features.buildChain()),
@@ -638,7 +628,7 @@ fn findMemoryType(self: VulkanContext, type_filter: u32, properties: vk.MemoryPr
     } else return error.FailedToFindMemoryType;
 }
 
-fn checkPhysicalDeviceSuitabilities(self: *VulkanContext, device: vk.PhysicalDevice, has_anisitropy: *bool) bool {
+fn checkPhysicalDeviceSuitabilities(self: *VulkanContext, device: vk.PhysicalDevice) bool {
     // check device api version
     var device_properties: vk.PhysicalDeviceProperties = .{};
     vk.getPhysicalDeviceProperties(device, &device_properties);
@@ -651,7 +641,8 @@ fn checkPhysicalDeviceSuitabilities(self: *VulkanContext, device: vk.PhysicalDev
     var check_features: @TypeOf(device_features) = .init;
     vk.getPhysicalDeviceFeatures2(device, check_features.buildChain());
     if (!check_features.check(device_features)) return false;
-    has_anisitropy.* = check_features.features.@"2".features.samplerAnisotropy != vk.@"false";
+    const has_anisotropy = check_features.features.@"2".features.samplerAnisotropy != vk.@"false";
+    const has_sample_shading = check_features.features.@"2".features.sampleRateShading != vk.@"false";
 
     // check device extensions
     var count: u32 = 0;
@@ -678,6 +669,23 @@ fn checkPhysicalDeviceSuitabilities(self: *VulkanContext, device: vk.PhysicalDev
 
     // queue families
     self.queue_families = QueueFamilies.init(device, self.surface) catch return false;
+
+    // msaa sample count and sample rate shading
+    if (has_anisotropy) {
+        var properties: vk.PhysicalDeviceProperties = .{};
+        vk.getPhysicalDeviceProperties(self.physical_device, &properties);
+        const msaa_supported = properties.limits.framebufferColorSampleCounts;
+        if (msaa_supported >= 2) {
+            self.msaa_sample_count = @as(vk.SampleCountFlagBits, 1) << std.math.log2_int(vk.SampleCountFlags, msaa_supported);
+            log.debug("maximum msaa sample count: {d}", .{self.msaa_sample_count});
+
+            self.sample_shading = has_sample_shading;
+            if (!has_sample_shading) log.warn(
+                \\device supports anisotropy (msaa), but not for sample shading,
+                \\  this means sawtooth may still exist when msaa enabled.
+            , .{});
+        }
+    }
 
     return true;
 }
@@ -997,7 +1005,7 @@ pub fn createRenderingObjects(self: *VulkanContext) !void {
         .commandBufferCount = max_frames_in_flight,
     }, &self.command_buffers));
 
-    for (&self.in_flight_fences) |*fence| fence.* = null;
+    @memset(&self.in_flight_fences, null);
     errdefer for (self.in_flight_fences) |fence| {
         if (fence == null) break;
         vk.destroyFence(self.device, fence, null);
@@ -1007,7 +1015,7 @@ pub fn createRenderingObjects(self: *VulkanContext) !void {
 
 pub fn destroyRenderingObjects(self: *VulkanContext) void {
     for (&self.in_flight_fences) |fence| vk.destroyFence(self.device, fence, null);
-    for (&self.command_buffers) |*buf| buf.* = null;
+    @memset(&self.command_buffers, null);
 }
 
 
@@ -1085,7 +1093,7 @@ pub fn copyBuffer(self: VulkanContext, src_buffer: vk.Buffer, dst_buffer: vk.Buf
 
 
 pub fn createBuffers(self: VulkanContext, sizes: []const vk.DeviceSize, usages: []const vk.BufferUsageFlags, properties: vk.MemoryPropertyFlags, out_buffers: []vk.Buffer, out_offsets: []vk.DeviceSize) !struct {vk.DeviceMemory, vk.DeviceSize} {
-    for (out_buffers) |*buf| buf.* = null;
+    @memset(out_buffers, null);
     errdefer for (out_buffers) |buf| {
         if (buf == null) break;
         vk.destroyBuffer(self.device, buf, null);
@@ -1239,6 +1247,8 @@ pub fn createGraphicsPipeline(self: VulkanContext, pipeline_cache: vk.PipelineCa
     const multisampling: vk.PipelineMultisampleStateCreateInfo = .{
         .sType = vk.structure_type_pipeline_multisample_state_create_info,
         .rasterizationSamples = if (self.msaaRenderingEnabled()) self.msaa_sample_count else vk.sample_count_1_bit,
+        .sampleShadingEnable = if (self.msaaRenderingEnabled() and self.sample_shading) vk.@"true" else vk.@"false",
+        .minSampleShading = if (self.msaaRenderingEnabled() and self.sample_shading) 1 else 0,
     };
 
     const color_blend_attachment: vk.PipelineColorBlendAttachmentState = .{

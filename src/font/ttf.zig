@@ -15,36 +15,70 @@ const readIntsAlloc = helpers.readIntAlloc;
 
 
 pub const TableTag = enum(u32) {
+    acnt = TagNameToU32("acnt"),
+    ankr = TagNameToU32("ankr"),
+    avar = TagNameToU32("avar"),
+    bdat = TagNameToU32("bdat"),
+    bhea = TagNameToU32("bhea"),
+    bloc = TagNameToU32("bloc"),
+    bsln = TagNameToU32("bsln"),
     /// character to glyph mapping
     cmap = TagNameToU32("cmap"),
+    cvar = TagNameToU32("cvar"),
+    /// control value
+    cvt  = TagNameToU32("cvt "),
+    EBSC = TagNameToU32("EBSC"),
+    fdsc = TagNameToU32("fdsc"),
+    feat = TagNameToU32("feat"),
+    fmtx = TagNameToU32("fmtx"),
+    fond = TagNameToU32("fond"),
+    /// font program
+    fpgm = TagNameToU32("fpgm"),
+    fvar = TagNameToU32("fvar"),
+    gasp = TagNameToU32("gasp"),
+    gcid = TagNameToU32("gcid"),
     /// glyph data
     glyf = TagNameToU32("glyf"),
+    gvar = TagNameToU32("gvar"),
+    /// horizontal device metrics
+    hdmx = TagNameToU32("hdmx"),
     /// font header
     head = TagNameToU32("head"),
     /// horizontal header
     hhea = TagNameToU32("hhea"),
     /// horizontal metrics
     hmtx = TagNameToU32("hmtx"),
-    /// index to location
-    loca = TagNameToU32("loca"),
-    /// maximum profile
-    maxp = TagNameToU32("maxp"),
-    /// naming
-    name = TagNameToU32("name"),
-    /// post script
-    post = TagNameToU32("post"),
-    /// control value
-    cvt  = TagNameToU32("cvt "),
-    /// font program
-    fpgm = TagNameToU32("fpgm"),
-    /// horizontal device metrics
-    hdmx = TagNameToU32("hdmx"),
+    hvgl = TagNameToU32("hvgl"),
+    hvpm = TagNameToU32("hvpm"),
+    just = TagNameToU32("just"),
     /// kerning
     kern = TagNameToU32("kern"),
+    kerx = TagNameToU32("kerx"),
+    lcar = TagNameToU32("lcar"),
+    /// index to location
+    loca = TagNameToU32("loca"),
+    ltag = TagNameToU32("ltag"),
+    /// maximum profile
+    maxp = TagNameToU32("maxp"),
+    meta = TagNameToU32("meta"),
+    mort = TagNameToU32("mort"),
+    morx = TagNameToU32("morx"),
+    /// naming
+    name = TagNameToU32("name"),
+    opbd = TagNameToU32("opbd"),
     /// OS/2
     OS_2 = TagNameToU32("OS/2"),
+    /// post script
+    post = TagNameToU32("post"),
     /// control value program
-    perp = TagNameToU32("perp"),
+    prep = TagNameToU32("prep"),
+    prop = TagNameToU32("prop"),
+    sbix = TagNameToU32("sbix"),
+    tark = TagNameToU32("tark"),
+    vhea = TagNameToU32("vhea"),
+    vmtx = TagNameToU32("vmtx"),
+    xref = TagNameToU32("xref"),
+    Zapf = TagNameToU32("Zapf"),
     _,
 
     fn TagNameToU32(name: *const [4]u8) u32 {
@@ -264,7 +298,7 @@ pub const CmapEncodingSubtable = extern struct {
     }
 
     pub fn isTheBest(self: CmapEncodingSubtable) bool {
-        return self.isUnicode() and 
+        return self.isUnicode() and
             !self.isUnicodeDiscarded() and
             self.isUnicodeRestrictedToBMP() == .false;
     }
@@ -358,7 +392,7 @@ pub const CmapSubtable = struct {
             std.debug.assert(self.seg_count_x2 & 1 == 0);
             const seg_count = self.seg_count_x2 / 2;
 
-            const data_buf = ensureAlloc(helpers.allocator.alloc(u16, self.seg_count_x2 * 2));
+            const data_buf = helpers.alloc(u16, self.seg_count_x2 * 2);
             errdefer helpers.allocator.free(data_buf);
             self.end_code = data_buf[0..seg_count]; self.start_code = data_buf[seg_count..2*seg_count];
             self.id_delta = data_buf[2*seg_count..3*seg_count]; self.id_range_offset = data_buf[3*seg_count..];
@@ -559,7 +593,7 @@ pub const CmapSubtable = struct {
             try reader.discardAll(@sizeOf(u16));
             self.length, self.language, const n_groups = (try reader.takeStruct(extern struct { a: [3]u32 }, .big)).a;
 
-            self.groups = ensureAlloc(helpers.allocator.alloc(Group, n_groups));
+            self.groups = helpers.alloc(Group, n_groups);
             errdefer helpers.allocator.free(self.groups);
             try reader.readSliceAll(@as([*]u8, @ptrCast(self.groups))[0 .. @sizeOf(Group) * n_groups]);
             if (native_endian == .little) std.mem.byteSwapAllElements(Group, self.groups);
@@ -583,7 +617,7 @@ pub const CmapSubtable = struct {
         }
 
         pub fn collectRangeMappingsAlloc(self: CmapSubtable.Format12) []CharGlyphMapping.RangeMapping {
-            const mappings = ensureAlloc(helpers.allocator.alloc(CharGlyphMapping.RangeMapping, self.groups.len));
+            const mappings = helpers.alloc(CharGlyphMapping.RangeMapping, self.groups.len);
             errdefer helpers.allocator.free(mappings);
             for (self.groups, mappings) |group, *mapping| {
                 mapping.* = .{
@@ -754,7 +788,7 @@ pub const SimpleGlyph = struct {
             if (flag.on_curve) self.on_curve.set(idx);
         }
 
-        self.coordinates = ensureAlloc(helpers.allocator.alloc(Point, point_count));
+        self.coordinates = helpers.alloc(Point, point_count);
         errdefer helpers.allocator.free(self.coordinates);
         // x
         var x_abs: i16 = 0;
@@ -894,3 +928,39 @@ pub const ComponentGlyph = struct {
     }
 };
 
+pub const Hhea = extern struct {
+    version: VersionNumber align(1),
+    /// Distance from baseline of highest ascender
+    ascent: i16 align(1),
+    /// Distance from baseline of lowest descender
+    decent: i16 align(1),
+    /// typographic line gap
+    line_gap: i16 align(1),
+    /// must be consistent with horizontal metrics
+    advance_width_max: u16 align(1),
+    /// must be consistent with horizontal metrics
+    min_left_side_bearing: i16 align(1),
+    /// must be consistent with horizontal metrics
+    min_right_side_bearing: i16 align(1),
+    /// max(lsb + (xMax-xMin))
+    x_max_extent: i16 align(1),
+    /// used to calculate the slope of the caret (rise/run) set to 1 for vertical caret
+    caret_slope_rise: i16 align(1),
+    /// 0 for vertical
+    caret_slope_run: i16 align(1),
+    ///  set value to 0 for non-slanted fonts
+    caret_offset: i16 align(1),
+    _reserved1: i16 align(1),
+    _reserved2: i16 align(1),
+    _reserved3: i16 align(1),
+    _reserved4: i16 align(1),
+    /// 0 for current format
+    metric_data_format: i16 align(1),
+    /// number of advance widths in metrics table
+    num_of_long_hor_metrics: u16 align(1),
+};
+
+pub const LongHorMetric = extern struct {
+    advance_width: u16 align(1),
+    left_side_bearing: i16 align(1),
+};

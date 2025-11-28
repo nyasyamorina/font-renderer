@@ -6,8 +6,6 @@ const render_glyph = @import("render_glyph.zig");
 const Point = @import("geometry.zig").Point;
 const Image = @This();
 
-const ensureAlloc = helpers.ensureAlloc;
-
 
 vtable: *const VTable,
 
@@ -241,4 +239,3 @@ pub const GlyphDebug = struct {
         return im;
     }
 };
-
