@@ -1,0 +1,51 @@
+struct Vertex {
+    uint32_t position;
+    uint8_t tex_coord;
+};
+
+struct VertOut {
+    float4 position : SV_Position;
+    float2 tex_coord;
+};
+
+struct Transform {
+    float2 scale;
+    float2 offset;
+};
+[push_constant]
+ConstantBuffer<Transform> transform;
+
+
+[shader("vertex")]
+VertOut vertMain(Vertex vertex) {
+    VertOut output;
+
+    float2 position = float2(bit_cast<int16_t2, uint32_t>(vertex.position));
+    float2 pos = position * transform.scale + transform.offset;
+
+    output.position = float4(pos.x, -pos.y, 0.0, 1.0);
+    output.tex_coord = float2(float(vertex.tex_coord & 1), float((vertex.tex_coord >> 1) & 1));
+    return output;
+}
+
+[shader("fragment")]
+float4 concaveMain(VertOut input) : SV_Target {
+    float3 ccc = float3(1.0, 0.0, 0.0);
+    float tmp = 1.0 + input.tex_coord.x - input.tex_coord.y;
+    if (tmp * tmp < 4.0 * input.tex_coord.x) return float4(ccc, 0.2); //discard;
+    return float4(ccc, 0.5);
+}
+
+[shader("fragment")]
+float4 convexMain(VertOut input) : SV_Target {
+    float3 ccc = float3(0.0, 1.0, 0.0);
+    float tmp = 1.0 + input.tex_coord.x - input.tex_coord.y;
+    if (tmp * tmp > 4.0 * input.tex_coord.x) return float4(ccc, 0.2); //discard;
+    return float4(ccc, 0.5);
+}
+
+[shader("fragment")]
+float4 solidMain(VertOut input) : SV_Target {
+    float3 ccc = float3(0.0, 0.0, 1.0);
+    return float4(ccc, 0.2);
+}

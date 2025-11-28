@@ -13,6 +13,8 @@ scroll_accumulate: f64 = 0,
 esc_pressed: bool = false,
 change_msaa: bool = false,
 char_remove_count: u32 = 0,
+change_transparent: bool = false,
+change_shader: bool = false,
 
 
 pub export fn resizeCallback(window: ?*glfw.Window, width: c_int, height: c_int) callconv(.c) void {
@@ -66,7 +68,9 @@ fn keyFn(self: *CallbackContext, key: glfw.Key, scancode: c_int, action: glfw.Ac
     switch (key) {
         .escape => { if (action == .release) self.esc_pressed = true; },
         .backspace => { if (action != .release) self.char_remove_count += 1; },
-        .m => { if (mods.control and action == .press) self.change_msaa = true; },
+        .M => { if (mods.control and action == .press) self.change_msaa = true; },
+        .T => { if (mods.control and action == .press) self.change_transparent = true; },
+        .D => { if (mods.control and action == .press) self.change_shader = true; },
         else => {},
     }
     //std.debug.print("key: {any}, action: {any}, mods: {any}\n", .{key, action, mods});

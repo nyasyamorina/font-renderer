@@ -82,7 +82,7 @@ pub fn initEmpty() Glyph {
 }
 
 pub fn initTTFSimple(description: ttf.GlyphDescription, data: ttf.SimpleGlyph) !Glyph {
-    if (data.instructions.len > 0) @panic("not impl"); // TODO:
+    //if (data.instructions.len > 0) @panic("not impl"); // TODO:
 
     const contours = helpers.alloc(Contour, data.end_pts_of_contours.len);
     errdefer helpers.allocator.free(contours);

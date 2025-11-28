@@ -25,7 +25,9 @@ pub const Action = enum(c_int) {
 pub const Key = enum(c_int) {
     escape = c.GLFW_KEY_ESCAPE,
     backspace = c.GLFW_KEY_BACKSPACE,
-    m = c.GLFW_KEY_M,
+    M = c.GLFW_KEY_M,
+    T = c.GLFW_KEY_T,
+    D = c.GLFW_KEY_D,
     _,
 };
 pub const Mods = packed struct(c_int) {

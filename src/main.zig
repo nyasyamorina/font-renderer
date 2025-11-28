@@ -47,8 +47,7 @@ pub fn main() !void {
     //try qoi.saveRGB(&qoi_writer.interface, &glyph_debug.rgb.interface);
 
     var callback_ctx: CallbackContext = .{};
-    const enable_cache = config.enable_cache.value orelse false;
-    var appli: Appli = try .init(&font, &callback_ctx, .{ .width = 800, .height = 600 }, "font renderer", enable_cache);
+    var appli: Appli = try .init(&font, &callback_ctx, .{ .width = 800, .height = 600 }, "font renderer", config);
     defer appli.deinit();
 
     if (config.text.value) |text| {

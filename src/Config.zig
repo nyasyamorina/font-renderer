@@ -10,6 +10,7 @@ const fields = @typeInfo(Config).@"struct".fields;
 font_file: Option([]const u8, "font_file", 'f'),
 text: Option(?[]const u8, "text", 't'),
 enable_cache: Option(?bool, "cache", 'c'),
+debug_shader: Option(?bool, "debug", 'd'),
 
 
 pub const OptionType = enum {

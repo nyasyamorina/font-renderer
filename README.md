@@ -52,6 +52,8 @@ Rendering glyph based on triangulation.
 
 - `-c/--cache`: enable pipeline caching
 
+- `-d/--debug`: enable debug shader
+
 ---
 
 ### Keybinds
@@ -60,14 +62,18 @@ Rendering glyph based on triangulation.
 
 - `<ctrl>+M`: toggle the MSAA rendering
 
+- `<ctrl>+T`: toggle the transparent background
+
+- `<ctrl>+D`: toggle normal shader and debug shader
+
 ---
 
 ### TODO
-
-- use `<ctrl>+T` to toggle the transparent background
 
 - user text input and deletion
 
 - line breaking
 
-- fix wrong glyph triangulation
+- fix wrong glyph triangulation (concave and convex triangles intersection, or even concave triangle (on the inner contour) stick out beyond the outer contour)
+
+- right to left font

@@ -3,6 +3,7 @@ const std = @import("std");
 const Appli = @This();
 const CallbackContext = @import("CallbackContext.zig");
 const CacheManager = @import("CacheManager.zig");
+const Config = @import("Config.zig");
 const helpers = @import("helpers.zig");
 const Font = @import("font/Font.zig");
 const Point = @import("tools/geometry.zig").Point;
@@ -18,6 +19,7 @@ font: *Font,
 cb_ctx: *CallbackContext,
 vk_ctx: VulkanContext,
 cc_mng: CacheManager,
+use_debug_shader: bool,
 general_pipeline_layout: vk.PipelineLayout,
 concave_pipeline: vk.Pipeline = null,
 convex_pipeline: vk.Pipeline = null,
@@ -93,13 +95,13 @@ const GlyphMapValue = struct {
     transforms: std.ArrayList(Transform) = .empty,
 };
 
-pub fn init(font: *Font, cb_ctx: *CallbackContext, window_size: vk.Extent2D, window_title: [*:0]const u8, enable_cache: bool) !Appli {
+pub fn init(font: *Font, cb_ctx: *CallbackContext, window_size: vk.Extent2D, window_title: [*:0]const u8, config: *const Config) !Appli {
     if (glfw.init() != glfw.@"true") return error.@"failed to initialize glfw";
     errdefer glfw.terminate();
 
     var vk_ctx: VulkanContext = try .init(cb_ctx, window_size, window_title);
     errdefer vk_ctx.deinit();
-    var cc_mng: CacheManager = try .init(enable_cache);
+    var cc_mng: CacheManager = try .init(config.enable_cache.value orelse false);
     errdefer cc_mng.deinit(vk_ctx.device);
 
     const pipeline_layout = try vk_ctx.createPipelineLayout(Transform);
@@ -109,6 +111,7 @@ pub fn init(font: *Font, cb_ctx: *CallbackContext, window_size: vk.Extent2D, win
         .cb_ctx = cb_ctx,
         .cc_mng = cc_mng,
         .vk_ctx = vk_ctx,
+        .use_debug_shader = config.debug_shader.value orelse false,
         .general_pipeline_layout = pipeline_layout,
         .view_transform = .init(font.information.units_per_em, vk_ctx.surface_info.extent),
     };
@@ -299,8 +302,9 @@ pub const GlyphObject = struct {
 };
 
 const shader = struct {
-    const slang align(4) = @embedFile("shader.slang").*;
-    const _ = std.debug.assert(slang.len % 4 == 0);
+    const normal align(4) = @embedFile("shader.slang").*;
+    const debug align(4) = @embedFile("debug.slang").*;
+    const _ = std.debug.assert(normal.len % 4 == 0 and debug.len % 4 == 0);
 
     const entries = struct {
         const vertMain = "vertMain";
@@ -358,10 +362,10 @@ fn updateTotalTransforms(self: *Appli) void {
 
 
 fn applyAspectRatio(self: *Appli) void {
-    if (!self.vk_ctx.recreated_swapchain) return;
+    if (!self.vk_ctx.changed_extent) return;
     self.view_transform.aspect_ratio = @as(f32, @floatFromInt(self.vk_ctx.surface_info.extent.width)) / @as(f32, @floatFromInt(self.vk_ctx.surface_info.extent.height));
     self.transform_changed = true;
-    self.vk_ctx.recreated_swapchain = false;
+    self.vk_ctx.changed_extent = false;
 }
 
 fn cursorPosition(self: *Appli) Point(f32) {
@@ -405,18 +409,20 @@ fn drag(self: *Appli) void {
 
 
 fn createGraphicsPipelines(self: *Appli) !void {
+    const shader_code = if (self.use_debug_shader) &shader.debug else &shader.normal;
+
     const concave_cache = self.cc_mng.getPipelineCache(self.vk_ctx.device, .concave);
-    self.concave_pipeline = try self.vk_ctx.createGraphicsPipeline(concave_cache, &shader.slang, shader.entries.vertMain, shader.entries.concaveMain, self.general_pipeline_layout);
+    self.concave_pipeline = try self.vk_ctx.createGraphicsPipeline(concave_cache, shader_code, shader.entries.vertMain, shader.entries.concaveMain, self.general_pipeline_layout);
     errdefer vk.destroyPipeline(self.vk_ctx.device, self.concave_pipeline, null);
     self.cc_mng.updatePipelineCache(self.vk_ctx.device, .concave);
 
     const convex_cache = self.cc_mng.getPipelineCache(self.vk_ctx.device, .convex);
-    self.convex_pipeline = try self.vk_ctx.createGraphicsPipeline(convex_cache, &shader.slang, shader.entries.vertMain, shader.entries.convexMain, self.general_pipeline_layout);
+    self.convex_pipeline = try self.vk_ctx.createGraphicsPipeline(convex_cache, shader_code, shader.entries.vertMain, shader.entries.convexMain, self.general_pipeline_layout);
     errdefer vk.destroyPipeline(self.vk_ctx.device, self.convex_pipeline, null);
     self.cc_mng.updatePipelineCache(self.vk_ctx.device, .convex);
 
     const solid_cache = self.cc_mng.getPipelineCache(self.vk_ctx.device, .solid);
-    self.solid_pipeline = try self.vk_ctx.createGraphicsPipeline(solid_cache, &shader.slang, shader.entries.vertMain, shader.entries.solidMain, self.general_pipeline_layout);
+    self.solid_pipeline = try self.vk_ctx.createGraphicsPipeline(solid_cache, shader_code, shader.entries.vertMain, shader.entries.solidMain, self.general_pipeline_layout);
     errdefer vk.destroyPipeline(self.vk_ctx.device, self.solid_pipeline, null);
     self.cc_mng.updatePipelineCache(self.vk_ctx.device, .solid);
 }

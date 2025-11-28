@@ -34,6 +34,7 @@ queue_families: QueueFamilies = undefined,
 queues: Queues = .{},
 command_pools: CommandPools = .{},
 surface_info: SurfaceInfo = undefined,
+use_transparent_background: bool = false,
 swapchain: vk.SwapchainKHR = null,
 swapchain_images: std.ArrayList(vk.Image) = .empty,
 swapchain_image_views: std.ArrayList(vk.ImageView) = .empty,
@@ -41,7 +42,7 @@ swapchain_operations: SwapchainOperations = undefined,
 command_buffers: [max_frames_in_flight]vk.CommandBuffer = undefined,
 in_flight_fences: [max_frames_in_flight]vk.Fence = undefined,
 in_flight_frame: u32 = 0,
-recreated_swapchain: bool = false,
+changed_extent: bool = false,
 
 
 pub const max_frames_in_flight = 2;
@@ -109,6 +110,7 @@ pub fn startMainLoop(self: *VulkanContext, appli: *Appli) !void {
         glfw.pollEvents();
         //helpers.timer.report("glfw.pollEvents");
 
+        var update_pipeline = false;
         if (self.cb_ctx.change_msaa) blk: {
             self.cb_ctx.change_msaa = false;
             _ = vk.deviceWaitIdle(self.device);
@@ -124,8 +126,18 @@ pub fn startMainLoop(self: *VulkanContext, appli: *Appli) !void {
                     break :blk;
                 };
             }
+            update_pipeline = true;
+        }
+        if (self.cb_ctx.change_shader) {
+            self.cb_ctx.change_shader = false;
+            appli.use_debug_shader = !appli.use_debug_shader;
+            log.debug("switching shader", .{});
+            update_pipeline = true;
+        }
+        if (update_pipeline) {
+            _ = vk.deviceWaitIdle(self.device);
             try appli.recreateGraphicsPipelines();
-            //helpers.timer.report("change_msaa");
+            //helpers.timer.report("recreateGraphicsPipelines");
         }
 
         const current_fence = self.in_flight_fences[self.in_flight_frame];
@@ -168,18 +180,35 @@ pub fn startMainLoop(self: *VulkanContext, appli: *Appli) !void {
         }, current_fence));
 
         const present_result = self.swapchain_operations.present(self.queues.present, self.swapchain, acquire_result);
-        sw: switch (present_result) {
-            vk.success => if (self.cb_ctx.resized) continue :sw vk.suboptimal_KHR,
+        //helpers.timer.report("present");
+        var recreate_swapchain = false;
+        var recreate_swapchain_opts: CreateSwapchainStuffOptions = .{};
+        switch (present_result) {
+            vk.success => {
+                if (self.cb_ctx.change_transparent) {
+                    self.cb_ctx.change_transparent = false;
+                    self.use_transparent_background = !self.use_transparent_background;
+                    log.debug("switching background transparence", .{});
+                    recreate_swapchain = true;
+                }
+                if (self.cb_ctx.resized) {
+                    recreate_swapchain = true;
+                    recreate_swapchain_opts.update_extent = true;
+                }
+            },
             vk.suboptimal_KHR, vk.error_out_of_date_KHR => {
-                try self.recreateSwapchainStuff(.{ .update_extent = true });
-                continue;
+                recreate_swapchain = true;
+                recreate_swapchain_opts.update_extent = true;
             },
             else => {
                 std.log.scoped(.vk).err("unexpected result {d} returned from {s}", .{acquire_result.result, "vkQueuePresentKHR"});
                 return error.VkNotSuccess;
             },
         }
-        //helpers.timer.report("present");
+        if (recreate_swapchain){
+            try self.recreateSwapchainStuff(recreate_swapchain_opts);
+            //helpers.timer.report("recreateSwapchainStuff");
+        }
     }
 }
 
@@ -278,6 +307,28 @@ pub fn msaaRenderingEnabled(self: VulkanContext) bool {
 pub fn enableMsaaRendering(self: *VulkanContext) !void {
     std.debug.assert(!self.msaaRenderingEnabled());
     log.debug("enabling msaa", .{});
+    try self.createMsaaStuff();
+    self.color_attachment_info.imageView = self.color_image_view;
+    self.color_attachment_info.resolveMode = vk.resolve_mode_average_bit;
+}
+
+pub fn recreateMsaaStuff(self: *VulkanContext) !void {
+    self.destroyMsaaStuff();
+    if (self.msaaRenderingEnabled()) {
+        try self.createMsaaStuff();
+        self.color_attachment_info.imageView = self.color_image_view;
+        self.color_attachment_info.resolveMode = vk.resolve_mode_average_bit;
+    }
+}
+
+pub fn disableMsaaRendering(self: *VulkanContext) void {
+    log.debug("disabling msaa", .{});
+    self.destroyMsaaStuff();
+    self.color_attachment_info.resolveImageView = null;
+    self.color_attachment_info.resolveMode = 0;
+}
+
+fn createMsaaStuff(self: *VulkanContext) !void {
     errdefer self.destroyMsaaStuff();
 
     const info: Image2DInfo = .{
@@ -317,16 +368,6 @@ pub fn enableMsaaRendering(self: *VulkanContext) !void {
         },
     });
     try self.endSingleTimeCommands(command_buffer);
-
-    self.color_attachment_info.imageView = self.color_image_view;
-    self.color_attachment_info.resolveMode = vk.resolve_mode_average_bit;
-}
-
-pub fn disableMsaaRendering(self: *VulkanContext) void {
-    log.debug("disabling msaa", .{});
-    self.destroyMsaaStuff();
-    self.color_attachment_info.resolveImageView = null;
-    self.color_attachment_info.resolveMode = 0;
 }
 
 fn destroyMsaaStuff(self: *VulkanContext) void {
@@ -847,12 +888,12 @@ fn createSwapchainStuff(self: *VulkanContext, opts: CreateSwapchainStuffOptions)
         .imageSharingMode = if (unique_queue_families.count() < 2) vk.sharing_mode_exclusive else vk.sharing_mode_concurrent,
         .queueFamilyIndexCount = @intCast(unique_queue_families.count()),
         .pQueueFamilyIndices = unique_queue_families.keys().ptr,
-        .compositeAlpha = vk.composite_alpha_pre_multiplied_bit_KHR,
+        .compositeAlpha = if (self.use_transparent_background) vk.composite_alpha_pre_multiplied_bit_KHR else vk.composite_alpha_opaque_bit_KHR,
         .oldSwapchain = old_swapchain,
     };
     try ensureVkSuccess("vkCreateSwapchainKHR", vk.createSwapchainKHR(self.device, &swapchain_info, null, &self.swapchain));
     errdefer vk.destroySwapchainKHR(self.device, self.swapchain, null);
-    self.recreated_swapchain = old_swapchain != null;
+    self.changed_extent = old_swapchain != null and opts.update_extent;
 
     // swapchain images
     var count: u32 = 0;
@@ -890,6 +931,7 @@ fn recreateSwapchainStuff(self: *VulkanContext, opts: CreateSwapchainStuffOption
     _ = vk.deviceWaitIdle(self.device);
     self.destroySwapchainStuff(false);
     try self.createSwapchainStuff(opts);
+    if (opts.update_extent) try self.recreateMsaaStuff();
     self.cb_ctx.resized = false;
 }
 
