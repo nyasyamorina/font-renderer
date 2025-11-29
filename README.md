@@ -74,7 +74,11 @@ Rendering glyph based on triangulation.
 
 - line breaking
 
-- fix wrong glyph triangulation (concave and convex triangles intersection, or even concave triangle (on the inner contour) stick out beyond the outer contour)
+- fix wrong glyph triangulation
+
+    - fix rounding error (this maybe need to using `f32` instead of `i16` to preform calculation)
+
+    - fix crashing cause by the new fixing
 
 - right to left font
 

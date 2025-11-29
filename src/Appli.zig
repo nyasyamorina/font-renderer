@@ -231,7 +231,7 @@ pub const GlyphObject = struct {
 
     pub fn init(ctx: VulkanContext, glyph: TriangulatedGlyph) !GlyphObject {
         const sizes: [2]u64 = .{
-            @sizeOf(TriangulatedGlyph.Vertex) * glyph.vertices.len,
+            @sizeOf(TriangulatedGlyph.Vertex) * glyph.vertices.items.len,
             @sizeOf([3]u16) * glyph.indices.items.len,
         };
         const buf_usages: [2]vk.BufferUsageFlags = .{
@@ -258,7 +258,7 @@ pub const GlyphObject = struct {
             defer vk.unmapMemory(ctx.device, staging_mem);
 
             const vertices: [*]align(1) TriangulatedGlyph.Vertex = @ptrCast(&data.?[offsets[0]]);
-            @memcpy(vertices, glyph.vertices);
+            @memcpy(vertices, glyph.vertices.items);
             const indices: [*]align(1) [3]u16 = @ptrCast(&data.?[offsets[1]]);
             @memcpy(indices, glyph.indices.items);
         }

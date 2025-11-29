@@ -44,16 +44,13 @@ pub fn Point(comptime T: type) type {
 
 
 pub const Triangulation = struct {
-    vertices: []const Vertex,
     contour_edges: std.ArrayList([2]u16) = .empty,
     contour_start_index: u16 = 0,
     vertex_sorted_indices: std.ArrayList(u16) = .empty,
     vertex_contour_connections: std.ArrayList(struct {u16, u16, std.math.Order}) = .empty,
     edge_manager: EdgeManager = .{},
 
-    pub fn init(vertices: []const Vertex) Triangulation {
-        return .{ .vertices = vertices };
-    }
+    pub const init: Triangulation = .{};
 
     pub fn deinit(self: *Triangulation) void {
         self.contour_edges.deinit(helpers.allocator);
@@ -74,8 +71,84 @@ pub const Triangulation = struct {
         self.contour_start_index = next_contour_start_index;
     }
 
-    pub fn run(self: *Triangulation, output_to: *std.ArrayList([3]u16)) void {
-        self.sortVertices();
+    pub fn preProcessContour(self: *Triangulation, vertices: *std.ArrayList(Vertex)) void {
+        var remove_edge_indices: std.AutoArrayHashMapUnmanaged(usize, void) = .empty;
+        defer remove_edge_indices.deinit(helpers.allocator);
+
+        const edge_count = self.contour_edges.items.len;
+        for (0 .. edge_count-1) |edge1_idx| {
+            for (edge1_idx+1 .. edge_count) |edge2_idx| {
+                const edge1 = self.contour_edges.items[edge1_idx];
+                const edge2 = self.contour_edges.items[edge2_idx];
+                if (edge1[0] == edge2[0] or edge1[0] == edge2[1] or
+                    edge1[1] == edge2[0] or edge1[1] == edge2[1]) continue;
+
+                if (crossAt(vertices.items, edge1, edge2)) |p_f32| {
+                    const p_index: u16 = @intCast(vertices.items.len);
+                    helpers.ensureAlloc(vertices.append(helpers.allocator, .{
+                        .position = .{
+                            // ! the coord will round to nearest integer,
+                            // this will cause wrong rendering effect
+                            .x = @intFromFloat(std.math.round(p_f32.x)),
+                            .y = @intFromFloat(std.math.round(p_f32.y)),
+                        },
+                        .tex_coord = undefined,
+                    }));
+
+                    const o = vertices.items[p_index].position.to(i32);
+                    const xo = vertices.items[edge1[1]].position.to(i32).sub(o);
+                    const yo = vertices.items[edge2[1]].position.to(i32).sub(o);
+                    helpers.ensureAlloc(self.contour_edges.ensureUnusedCapacity(helpers.allocator, 2));
+                    switch (std.math.order(xo.x * yo.y, xo.y * yo.x)) {
+                        .eq => unreachable,
+                        .lt => {
+                            self.contour_edges.appendAssumeCapacity(.{edge1[0], p_index});
+                            self.contour_edges.appendAssumeCapacity(.{p_index, edge2[1]});
+                        },
+                        .gt => {
+                            self.contour_edges.appendAssumeCapacity(.{edge2[0], p_index});
+                            self.contour_edges.appendAssumeCapacity(.{p_index, edge1[1]});
+                        },
+                    }
+
+                    helpers.ensureAlloc(remove_edge_indices.ensureUnusedCapacity(helpers.allocator, 2));
+                    remove_edge_indices.putAssumeCapacity(edge1_idx, undefined);
+                    remove_edge_indices.putAssumeCapacity(edge2_idx, undefined);
+                }
+            }
+        }
+
+        std.mem.sortUnstable(usize, remove_edge_indices.keys(), void {}, struct {
+            fn isGreaterThan(_: void, l: usize, r: usize) bool {
+                return l > r;
+            }
+        }.isGreaterThan);
+        for (remove_edge_indices.keys()) |index| _ = self.contour_edges.swapRemove(index);
+    }
+
+    fn crossAt(vertices: []const Vertex, edge1: [2]u16, edge2: [2]u16) ?Point(f32) {
+        const e1o = vertices[edge1[0]].position.to(f32);
+        const e2o = vertices[edge2[0]].position.to(f32);
+        const do = e2o.sub(e1o);
+        const d1 = vertices[edge1[1]].position.to(f32).sub(e1o);
+        const d2 = vertices[edge2[1]].position.to(f32).sub(e2o);
+        const f = d1.x * d2.y - d1.y * d2.x;
+        const g1 = do.x * d2.y - do.y * d2.x;
+        const g2 = do.x * d1.y - do.y * d1.x;
+
+        if (@abs(f) < 1e-5) return null;
+        const t1 = g1 / f;
+        const t2 = g2 / f;
+        if (t1 < 1e-5 or t1 > 1 - 1e-5) return null;
+        if (t2 < 1e-5 or t2 > 1 - 1e-5) return null;
+        return .{
+            .x = e1o.x + d1.x * t1,
+            .y = e1o.y + d1.y * t1,
+        };
+    }
+
+    pub fn run(self: *Triangulation, vertices: []const Vertex, triangles: *std.ArrayList([3]u16)) void {
+        self.sortVertices(vertices);
 
         var runner: Runner = .init;
         defer runner.deinit();
@@ -97,7 +170,7 @@ pub const Triangulation = struct {
             while (iter.next()) |entry| {
                 if (entry.value_ptr.@"0" == 0) continue;
                 const index = entry.key_ptr.*;
-                if (self.canConnect(skip_contour_edge_count, runner.edges.keys(), new_index, index)) {
+                if (self.canConnect(vertices, skip_contour_edge_count, runner.edges.keys(), new_index, index)) {
                     runner.connectEdge(.{new_index, index});
                     new_edge_count += 1;
                 }
@@ -119,8 +192,8 @@ pub const Triangulation = struct {
                     const old_edge = self.edge_manager.edge(.{p1, p2});
 
                     if (runner.edges.getIndex(old_edge)) |old_edge_idx| {
-                        const triangle = self.clockwiseTriangle(.{new_index, p1, p2});
-                        helpers.ensureAlloc(output_to.append(helpers.allocator, triangle));
+                        const triangle = clockwiseTriangle(vertices, .{new_index, p1, p2});
+                        helpers.ensureAlloc(triangles.append(helpers.allocator, triangle));
                         runner.countTriangle(new_edges_start + new_edge1, new_edges_start + new_edge2, old_edge_idx);
                     }
                 }
@@ -213,13 +286,12 @@ pub const Triangulation = struct {
         }
     };
 
-    fn sortVertices(self: *Triangulation) void {
+    fn sortVertices(self: *Triangulation, vertices: []const Vertex) void {
         self.vertex_sorted_indices.clearRetainingCapacity();
-        helpers.ensureAlloc(self.vertex_sorted_indices.ensureUnusedCapacity(helpers.allocator, self.vertices.len));
-        helpers.ensureAlloc(self.vertex_contour_connections.ensureTotalCapacity(helpers.allocator, self.vertices.len));
-        self.vertex_contour_connections.items.len = self.vertices.len;
+        helpers.ensureAlloc(self.vertex_sorted_indices.ensureUnusedCapacity(helpers.allocator, vertices.len));
+        helpers.ensureAlloc(self.vertex_contour_connections.resize(helpers.allocator, vertices.len));
 
-        var included = helpers.alloc(bool, self.vertices.len);
+        var included = helpers.alloc(bool, vertices.len);
         defer helpers.allocator.free(included);
         @memset(included, false);
         for (self.contour_edges.items) |edge| {
@@ -230,19 +302,19 @@ pub const Triangulation = struct {
         }
         for (self.vertex_contour_connections.items, included, 0..) |*conn, i, index| {
             if (!i) continue;
-            const o = self.vertices[index].position.to(i32);
-            const xo = self.vertices[conn.@"0"].position.to(i32).sub(o);
-            const yo = self.vertices[conn.@"1"].position.to(i32).sub(o);
+            const o = vertices[index].position.to(i32);
+            const xo = vertices[conn.@"0"].position.to(i32).sub(o);
+            const yo = vertices[conn.@"1"].position.to(i32).sub(o);
             conn.@"2" = std.math.order(xo.x * yo.y, xo.y * yo.x);
             self.vertex_sorted_indices.appendAssumeCapacity(@intCast(index));
         }
-        std.mem.sortUnstable(u16, self.vertex_sorted_indices.items, self.vertices, struct {
+        std.mem.sortUnstable(u16, self.vertex_sorted_indices.items, vertices, struct {
             fn isLessThan(v: []const Vertex, l: u16, r: u16) bool {
                 return v[l].position.x < v[r].position.x;
             }
         }.isLessThan);
 
-        self.edge_manager.init(@intCast(self.vertices.len), self.vertex_sorted_indices.items);
+        self.edge_manager.init(@intCast(vertices.len), self.vertex_sorted_indices.items);
         for (self.contour_edges.items) |*edge| edge.* = self.edge_manager.edge(edge.*);
         std.mem.sortUnstable([2]u16, self.contour_edges.items, self.edge_manager, struct {
             fn isLessThan(edge_manager: EdgeManager, l: [2]u16, r: [2]u16) bool {
@@ -251,31 +323,31 @@ pub const Triangulation = struct {
         }.isLessThan);
     }
 
-    fn canConnect(self: Triangulation, skip_contour_edge_count: u16, on_going_edges: []const [2]u16, from: u16, to: u16) bool {
+    fn canConnect(self: Triangulation, vertices: []const Vertex, skip_contour_edge_count: u16, on_going_edges: []const [2]u16, from: u16, to: u16) bool {
         const from_contour_conn = self.vertex_contour_connections.items[from];
         if (to == from_contour_conn[0] or to == from_contour_conn[1]) return false;
 
-        if (!self.onRightSide(from, to) or !self.onRightSide(to, from)) return false;
+        if (!self.onRightSide(vertices, from, to) or !self.onRightSide(vertices, to, from)) return false;
 
         for (on_going_edges) |edge| {
             if (edge[0] == from or edge[0] == to or edge[1] == from or edge[1] == to) continue;
-            if (self.isCross(.{from, to}, edge)) return false;
+            if (isCross(vertices, .{from, to}, edge)) return false;
         }
         for (self.contour_edges.items[skip_contour_edge_count ..]) |edge| {
             std.debug.assert(!(edge[0] == from or edge[0] == to));
             if (edge[1] == from or edge[1] == to) continue;
-            if (self.isCross(.{from, to}, edge)) return false;
+            if (isCross(vertices, .{from, to}, edge)) return false;
         }
 
         return true;
     }
 
-    fn onRightSide(self: Triangulation, origin: u16, target: u16) bool {
+    fn onRightSide(self: Triangulation, vertices: []const Vertex, origin: u16, target: u16) bool {
         const origin_conn = self.vertex_contour_connections.items[origin];
-        const o = self.vertices[origin].position.to(i32);
-        const xo = self.vertices[origin_conn.@"0"].position.to(i32).sub(o);
-        const yo = self.vertices[origin_conn.@"1"].position.to(i32).sub(o);
-        const po = self.vertices[target].position.to(i32).sub(o);
+        const o = vertices[origin].position.to(i32);
+        const xo = vertices[origin_conn.@"0"].position.to(i32).sub(o);
+        const yo = vertices[origin_conn.@"1"].position.to(i32).sub(o);
+        const po = vertices[target].position.to(i32).sub(o);
         const xopo = xo.dot(po);
         const xoyo = xo.dot(yo);
 
@@ -299,12 +371,12 @@ pub const Triangulation = struct {
         return (xopo > 0) ^ (cmp == .gt) ^ (tmp2 == .gt);
     }
 
-    fn isCross(self: Triangulation, edge1: [2]u16, edge2: [2]u16) bool {
-        const e1o = self.vertices[edge1[0]].position.to(i32);
-        const e2o = self.vertices[edge2[0]].position.to(i32);
+    fn isCross(vertices: []const Vertex, edge1: [2]u16, edge2: [2]u16) bool {
+        const e1o = vertices[edge1[0]].position.to(i32);
+        const e2o = vertices[edge2[0]].position.to(i32);
         const do = e2o.sub(e1o);
-        const d1 = self.vertices[edge1[1]].position.to(i32).sub(e1o);
-        const d2 = self.vertices[edge2[1]].position.to(i32).sub(e2o);
+        const d1 = vertices[edge1[1]].position.to(i32).sub(e1o);
+        const d2 = vertices[edge2[1]].position.to(i32).sub(e2o);
         const f = d1.x * d2.y - d1.y * d2.x;
         const g1 = do.x * d2.y - do.y * d2.x;
         const g2 = do.x * d1.y - do.y * d1.x;
@@ -316,10 +388,10 @@ pub const Triangulation = struct {
         }
     }
 
-    fn clockwiseTriangle(self: Triangulation, face: [3]u16) [3]u16 {
-        const o = self.vertices[face[0]].position.to(i32);
-        const xo = self.vertices[face[1]].position.to(i32).sub(o);
-        const yo = self.vertices[face[2]].position.to(i32).sub(o);
+    fn clockwiseTriangle(vertices: []const Vertex, face: [3]u16) [3]u16 {
+        const o = vertices[face[0]].position.to(i32);
+        const xo = vertices[face[1]].position.to(i32).sub(o);
+        const yo = vertices[face[2]].position.to(i32).sub(o);
 
         return if (xo.x * yo.y < xo.y * yo.x) .{face[0], face[2], face[1]} else face;
     }

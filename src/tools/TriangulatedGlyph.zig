@@ -10,7 +10,7 @@ const Point = geometry.Point;
 const Triangulation = geometry.Triangulation;
 
 
-vertices: []Vertex,
+vertices: std.ArrayList(Vertex),
 indices: std.ArrayList([3]u16),
 concave_count: u16,
 convex_count: u16,
@@ -52,18 +52,18 @@ pub fn init(glyph: Glyph) TriangulatedGlyph {
         curve_count += @intCast(contour.points.len / 2);
     }
 
-    var vertices = helpers.alloc(Vertex, vertex_count);
-    errdefer helpers.allocator.free(vertices);
+    var vertices: std.ArrayList(Vertex) = .empty;
+    errdefer vertices.deinit(helpers.allocator);
+    helpers.ensureAlloc(vertices.ensureUnusedCapacity(helpers.allocator, vertex_count));
     var indices: std.ArrayList([3]u16) = .empty;
     errdefer indices.deinit(helpers.allocator);
     helpers.ensureAlloc(indices.ensureUnusedCapacity(helpers.allocator, curve_count));
 
-    var triangulation: Triangulation = .init(vertices);
+    var triangulation: Triangulation = .init;
     defer triangulation.deinit();
 
     var concave_count: u16 = 0;
     var convex_count: u16 = 0;
-    var vertex_idx: u16 = 0;
     for (glyph.contours) |contour| {
         const count = contour.points.len / 2;
         for (0..count) |curve_idx| {
@@ -71,53 +71,55 @@ pub fn init(glyph: Glyph) TriangulatedGlyph {
             const p1 = contour.points[2 * curve_idx + 1].to(i32);
             const p2 = contour.points[2 * curve_idx + 2].to(i32);
 
+            const p0_index: u16 = @intCast(vertices.items.len);
             switch (std.math.order((p1.x - p0.x) * (p2.y - p0.y), (p1.y - p0.y) * (p2.x - p0.x))) {
                 .lt => { // clockwise curve, normally it means this curve is convex
                     {
                         indices.items.len += 1;
-                        indices.items[indices.items.len - 1] = .{vertex_idx + 0, vertex_idx + 2, vertex_idx + 1};
+                        indices.items[indices.items.len - 1] = .{p0_index, p0_index+2, p0_index+1};
                     }
                     convex_count += 1;
-                    triangulation.addEdge(.{vertex_idx + 0, vertex_idx + 2});
+                    triangulation.addEdge(.{p0_index, p0_index+2});
                 },
                 .eq => { // stright line
-                    triangulation.addEdge(.{vertex_idx + 0, vertex_idx + 2});
+                    triangulation.addEdge(.{p0_index, p0_index+2});
                 },
                 .gt => { // conter-clockwise, normally it means this curve is concave
                     {
                         indices.items.len += 1;
                         indices.items[indices.items.len - 1] = indices.items[concave_count];
-                        indices.items[concave_count] = .{vertex_idx + 0, vertex_idx + 1, vertex_idx + 2};
+                        indices.items[concave_count] = .{p0_index, p0_index+1, p0_index+2};
                     }
                     concave_count += 1;
-                    triangulation.addEdge(.{vertex_idx + 0, vertex_idx + 1});
-                    triangulation.addEdge(.{vertex_idx + 1, vertex_idx + 2});
+                    triangulation.addEdge(.{p0_index, p0_index+1});
+                    triangulation.addEdge(.{p0_index+1, p0_index+2});
                 },
             }
 
             const p0_is_tex_y_axis = curve_idx & 1 != 0;
-            vertices[vertex_idx + 0] = .{
+            vertices.appendAssumeCapacity(.{
                 .position = contour.points[2 * curve_idx + 0],
                 .tex_coord = .{ .x = @intFromBool(!p0_is_tex_y_axis), .y = @intFromBool(p0_is_tex_y_axis) },
-            };
-            vertices[vertex_idx + 1] = .{
+            });
+            vertices.appendAssumeCapacity(.{
                 .position = contour.points[2 * curve_idx + 1],
                 .tex_coord = .{ .x = 0, .y = 0 },
-            };
-            vertex_idx += 2;
+            });
         }
 
         // the last point in contour
         const is_tex_y_axis = count & 1 != 0;
-        vertices[vertex_idx] = .{
+        vertices.appendAssumeCapacity(.{
             .position = contour.points[contour.points.len - 1],
             .tex_coord = .{ .x = @intFromBool(!is_tex_y_axis), .y = @intFromBool(is_tex_y_axis) },
-        };
-        vertex_idx += 1;
+        });
         triangulation.endContour();
     }
 
-    triangulation.run(&indices);
+    if (vertices.items.len > 0) {
+        //triangulation.preProcessContour(&vertices);
+        triangulation.run(vertices.items, &indices);
+    }
 
     return .{
         .vertices = vertices,
@@ -129,7 +131,6 @@ pub fn init(glyph: Glyph) TriangulatedGlyph {
 }
 
 pub fn deinit(self: *TriangulatedGlyph) void {
-    helpers.allocator.free(self.vertices);
-    self.vertices = undefined;
+    self.vertices.deinit(helpers.allocator);
     self.indices.deinit(helpers.allocator);
 }
